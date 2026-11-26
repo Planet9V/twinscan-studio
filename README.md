@@ -10,7 +10,7 @@
 [![Three.js & Babylon.js](https://img.shields.io/badge/3D%20Engines-Three.js%20%2B%20Babylon.js-38BDF8?style=flat-square)](frontend/src/components/twin3d)
 [![PostgreSQL 18 + pgvector](https://img.shields.io/badge/PostgreSQL-18%20%2B%20pgvector-336791?style=flat-square&logo=postgresql&logoColor=white)](docker-compose.yml)
 [![Neo4j 5](https://img.shields.io/badge/Neo4j-5%20Graph-008CC1?style=flat-square&logo=neo4j&logoColor=white)](src/graph/neo4j_store.py)
-[![Tests](https://img.shields.io/badge/pytest-160%20passing-10B981?style=flat-square)](tests)
+[![Tests](https://img.shields.io/badge/pytest-166%20passing-10B981?style=flat-square)](tests)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)](LICENSE)
 
 [Quick Start](#quick-start-3-commands) · [Live Screenshots](#inside-the-studio) · [Flagship PuppyPi Pro Example](#flagship-example-hiwonder-puppypi-pro) · [Architecture](#system-architecture) · [Full Wiki (`docs/wiki/`)](docs/wiki/README.md) · [Early Bird Founders](#early-bird-maker-founders-50-spots)
@@ -44,7 +44,7 @@ Every capability below was built and tested against a real **Hiwonder PuppyPi Pr
 | **Live LD19 LiDAR Rate** | `5.0–6.9 Hz`, single-instance deduplicated (`0` timeouts) | `src/robot/ssh_manager.py` |
 | **Battery & RTH Telemetry** | Live 2S LiPo voltage (`8.30 V` / `95%`), auto-RTH at `7.10 V` | `src/robot/explorer_engine.py` |
 | **Cloud Dependency** | `0` required cloud accounts for video, voice, or LiDAR | `src/devices/local_camera_bridge.py` |
-| **Automated Verification** | `160` passing `pytest` tests (`0` warnings), `14` Next.js 16 routes | `tests/` + `frontend/` |
+| **Automated Verification** | `166` passing `pytest` tests (`0` warnings), `14` Next.js 16 routes | `tests/` + `frontend/` |
 
 ---
 
@@ -136,7 +136,7 @@ Everything in this repository ships with **Hiwonder PuppyPi Pro** as the end-to-
 | `/control` | **Robot Control & FPV** | Live FPV stream, velocity pad with `0.5 s` dead-man watchdog, 7 stances, 6 gaits, 38 actions, arm & OLED |
 | `/patrol` | **Patrol & Explorer** | Multi-waypoint VFH patrol, autonomous dark-zone frontier explorer, live FPV PiP, 2S LiPo RTH |
 | `/vision` | **AI Vision & Memory** | YOLO11n, YuNet/SFace Face ID, AprilTags, Spatial Memory Pro (Bento/Grid/Line + Archive), Sentry Guard |
-| `/voice` | **Voice & OX Assistant** | Offline `piper-tts` + `faster-whisper`, `"Hey OX"` wake word, 5+ custom personalities, 7-stage audio flow |
+| `/voice` | **Voice & OX Assistant** | Offline `piper-tts` + `faster-whisper`, `"Hey OX"` voice tool-calling, OpenClaw MCP bridge, 7-stage audio flow |
 | `/catalog` | **Fleet BOM & SBOM** | Live Pi 5 PMIC/USB telemetry, 22-part 3D hardware twin, CycloneDX 1.6 export, safe updater & log cleaner |
 | `/architect` | **Lab Architect** | 5-tier AI co-design canvas, 2D wiring + 3D assembly, micro:bit v2.21 studio, cloud-free local camera hub |
 | `/graph` | **Knowledge Graph** | Interactive React Flow Neo4j 5 (`G_CPDT`) visualizer and PostgreSQL 18 `pgvector` semantic search |
@@ -144,6 +144,13 @@ Everything in this repository ships with **Hiwonder PuppyPi Pro** as the end-to-
 | `/wiki` | **Wiki & Wizard** | 4-step Onboarding Wizard, searchable 10-guide Markdown reader, 16-node React Flow Site Tree, Support FAQ |
 
 Press `⌘K` (or `Ctrl+K`) on any page to jump directly to any workspace, room, or tool.
+
+### OpenClaw MCP Bridge & `"Hey OX"` Voice Tool-Calling
+
+External agents (OpenClaw, Claude Desktop, or any stdio MCP client) and the in-app `"Hey OX"` voice assistant share a single 10-tool safety-checked registry in `src/agent/robot_tools.py` (`get_robot_status`, `speak_aloud`, `run_body_action`, `capture_camera_snapshot`, `recall_spatial_memory`, `start_autonomous_explore`, `return_to_home`, `stop_robot_estop`, `scan_room_wall_3d`, and `chat_as_ox`).
+
+- **Stdio MCP Server (`src/agent/mcp_bridge.py`):** Run `.venv/bin/python -m src.agent.mcp_bridge` with `TWINSCAN_API_URL=http://localhost:8000` (zero extra dependencies) or copy the ready-made `openclaw/mcp-config.json` and `openclaw/skills/puppypi-twinscan/SKILL.md` directly from `/voice`.
+- **`"Hey OX"` Live Voice Tool-Calling:** Spoken or typed commands in `/voice` run live robot tools (via OpenRouter function calling with a 3-round safety cap, or offline keyword routing when no API key is set) and speak the result back in character.
 
 ---
 
@@ -257,7 +264,7 @@ Every guide in `docs/wiki/` is traced directly to source files with line-number 
 ## Local Development & Tests
 
 ```bash
-# Backend test suite (160 unit & API integration tests, 0 warnings)
+# Backend test suite (166 unit & API integration tests, 0 warnings)
 .venv/bin/pytest -v
 
 # Frontend TypeScript check & production build (14 static App Router pages)

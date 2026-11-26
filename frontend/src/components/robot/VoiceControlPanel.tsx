@@ -7,6 +7,7 @@ import {
   Bell,
   Bot,
   Camera,
+  Check,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -18,6 +19,8 @@ import {
   MessageSquare,
   Mic,
   MicOff,
+  Play,
+  Plug,
   Plus,
   Radio,
   RefreshCw,
@@ -29,6 +32,7 @@ import {
   Sparkles,
   Square,
   Stethoscope,
+  Terminal,
   Trash2,
   User,
   Volume2,
@@ -56,12 +60,15 @@ import {
   clearConversationHistory,
   createVoicePersonality,
   deleteVoicePersonality,
+  executeAgentTool,
   fetchConversationHistory,
   fetchConversationState,
   fetchVoiceCatalog,
   fetchVoiceConfig,
   fetchVoiceLogs,
   fetchVoiceStatus,
+  getAgentTools,
+  getOpenClawBundle,
   installUdevRules,
   listenVoiceCommand,
   listVoicePersonalities,
@@ -74,8 +81,11 @@ import {
   updateVoiceConfig,
   updateVoiceMixer,
   updateVoicePersonality,
+  type AgentExecuteResult,
+  type AgentToolSchema,
   type ConversationState,
   type ConversationTurn,
+  type OpenClawBundle,
   type VoiceActorOption,
   type VoiceAssistantConfig,
   type VoiceCatalogResponse,
@@ -273,6 +283,31 @@ const CHIMES: { id: "dong" | "wakeup" | "success" | "alert"; label: string }[] =
   { id: "alert", label: "Alert" },
 ];
 
+const FALLBACK_AGENT_TOOLS: AgentToolSchema[] = [
+  { name: "get_robot_status", description: "Live 2S LiPo battery, ROS 2 distro, 5-sector LD19 clearances & patrol/explorer state" },
+  { name: "run_body_action", description: "Execute allow-listed ROS 2 posture/trick (sit, stand, wave, bow, moonwalk, go_home)" },
+  { name: "capture_camera_snapshot", description: "Snap live PuppyPi FPV frame + active AI Vision detections summary" },
+  { name: "recall_spatial_memory", description: "Query PostgreSQL 18 Spatial Memory Pro object & room sightings" },
+  { name: "start_autonomous_explore", description: "Launch Stage-3 Frontier Explorer with automatic LiPo RTH guard" },
+  { name: "return_to_home", description: "Trigger autonomous Return-to-Home (RTH) navigation to AprilTag #0" },
+  { name: "stop_robot_estop", description: "Immediate E-STOP: halts patrol, explorer, sentry, AI vision & ROS locomotion" },
+  { name: "scan_room_wall_3d", description: "Run zero-movement Stage 1 3D wall fusion scan on active TwinScan space" },
+  { name: "speak_aloud", description: "Synthesize & speak text on WonderEcho Pro speaker (clamped <= 320 chars)" },
+  { name: "chat_as_ox", description: "Delegate a natural conversational turn to the embodied OX assistant" },
+];
+
+const FALLBACK_MCP_CONFIG = {
+  mcpServers: {
+    "puppypi-twinscan": {
+      command: ".venv/bin/python",
+      args: ["-m", "src.agent.mcp_bridge"],
+      env: {
+        TWINSCAN_API_URL: "http://localhost:8000",
+      },
+    },
+  },
+};
+
 function formatKb(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 KB";
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -429,6 +464,15 @@ export function VoiceControlPanel({ robot }: VoiceControlPanelProps) {
   const [diagListeningSec, setDiagListeningSec] = useState<number | null>(null);
   const [diagUsbExpanded, setDiagUsbExpanded] = useState(false);
 
+  // OpenClaw & MCP Agent Bridge state
+  const [agentTools, setAgentTools] = useState<AgentToolSchema[]>(FALLBACK_AGENT_TOOLS);
+  const [openClawBundle, setOpenClawBundle] = useState<OpenClawBundle | null>(null);
+  const [testingAgentTool, setTestingAgentTool] = useState(false);
+  const [agentTestResult, setAgentTestResult] = useState<AgentExecuteResult | null>(null);
+  const [agentTestError, setAgentTestError] = useState<string | null>(null);
+  const [copiedMcpConfig, setCopiedMcpConfig] = useState(false);
+  const [copiedSkillPath, setCopiedSkillPath] = useState(false);
+
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [banner, setBanner] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
 
@@ -563,7 +607,20 @@ export function VoiceControlPanel({ robot }: VoiceControlPanelProps) {
       return;
     }
     setDiagResult(null);
+    setAgentTestResult(null);
+    setAgentTestError(null);
     void refreshAll(robotId);
+    void Promise.all([
+      getAgentTools().catch(() => null),
+      getOpenClawBundle(robotId).catch(() => null),
+    ]).then(([toolsResp, bundleResp]) => {
+      if (toolsResp && toolsResp.mcp_tools.length > 0) {
+        setAgentTools(toolsResp.mcp_tools);
+      }
+      if (bundleResp) {
+        setOpenClawBundle(bundleResp);
+      }
+    });
   }, [robotId, refreshAll]);
 
   // Poll hands-free conversation state while active
@@ -709,7 +766,14 @@ export function VoiceControlPanel({ robot }: VoiceControlPanelProps) {
         attach_camera: chatCameraMode,
         execute_actions: chatBodyActions,
       });
-      setTurns((prev) => [...prev, res.user_turn, res.assistant_turn]);
+      const mergedAssistantTurn: ConversationTurn =
+        Array.isArray(res.tool_calls) &&
+        res.tool_calls.length > 0 &&
+        (!Array.isArray(res.assistant_turn.tool_calls) ||
+          res.assistant_turn.tool_calls.length === 0)
+          ? { ...res.assistant_turn, tool_calls: res.tool_calls }
+          : res.assistant_turn;
+      setTurns((prev) => [...prev, res.user_turn, mergedAssistantTurn]);
       if (res.spoken && res.engine_used) {
         setLastSpokenMeta({
           engine: res.engine_used,
@@ -966,6 +1030,41 @@ export function VoiceControlPanel({ robot }: VoiceControlPanelProps) {
         text: `Added "${normalized}" to wake aliases for "${updated.wake_word}".`,
       });
     });
+  };
+
+  const handleTestAgentStatusTool = async () => {
+    setTestingAgentTool(true);
+    setAgentTestError(null);
+    try {
+      const result = await executeAgentTool("get_robot_status", {}, robotId);
+      setAgentTestResult(result);
+    } catch (err) {
+      setAgentTestError(
+        err instanceof Error ? err.message : "Failed to execute get_robot_status tool"
+      );
+    } finally {
+      setTestingAgentTool(false);
+    }
+  };
+
+  const handleCopyMcpConfig = () => {
+    const cfg = openClawBundle?.mcp_config ?? FALLBACK_MCP_CONFIG;
+    const text = JSON.stringify(cfg, null, 2);
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      void navigator.clipboard.writeText(text).catch(() => {});
+    }
+    setCopiedMcpConfig(true);
+    window.setTimeout(() => setCopiedMcpConfig(false), 1800);
+  };
+
+  const handleCopySkillPath = () => {
+    const skillPath =
+      openClawBundle?.skill_path ?? "openclaw/skills/puppypi-twinscan/SKILL.md";
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      void navigator.clipboard.writeText(skillPath).catch(() => {});
+    }
+    setCopiedSkillPath(true);
+    window.setTimeout(() => setCopiedSkillPath(false), 1800);
   };
 
   const statePill = getConversationStatePill(convState, cfgWakeWord);
@@ -1424,6 +1523,38 @@ export function VoiceControlPanel({ robot }: VoiceControlPanelProps) {
                           <div className="text-xs leading-relaxed text-white whitespace-pre-wrap">
                             {turn.content}
                           </div>
+                          {!isUser &&
+                            Array.isArray(turn.tool_calls) &&
+                            turn.tool_calls.length > 0 && (
+                              <div className="flex flex-wrap items-center gap-1.5 border-t border-white/10 pt-2">
+                                <span className="font-mono text-[9px] uppercase tracking-wider text-eigenia-muted">
+                                  Tools:
+                                </span>
+                                {turn.tool_calls.map((tc, idx) => (
+                                  <span
+                                    key={`${turn.id}-tool-${idx}-${tc.tool}`}
+                                    title={`${tc.tool}: ${tc.summary}`}
+                                    className={`inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 font-mono text-[10px] ${
+                                      tc.ok
+                                        ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                                        : "border-eigenia-fault/50 bg-eigenia-fault/15 text-eigenia-fault"
+                                    }`}
+                                  >
+                                    {tc.ok ? (
+                                      <CheckCircle2 className="h-2.5 w-2.5 shrink-0" />
+                                    ) : (
+                                      <XCircle className="h-2.5 w-2.5 shrink-0" />
+                                    )}
+                                    <span className="font-semibold">{tc.tool}</span>
+                                    {tc.summary && (
+                                      <span className="max-w-[200px] truncate opacity-80">
+                                        · {tc.summary}
+                                      </span>
+                                    )}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                         </div>
                       </div>
                     );
@@ -1584,6 +1715,168 @@ export function VoiceControlPanel({ robot }: VoiceControlPanelProps) {
                     {phrase}
                   </Button>
                 ))}
+              </div>
+            </div>
+          </InteractiveSurface>
+
+          {/* Collapsible OpenClaw & MCP Agent Bridge (10 Tools) */}
+          <InteractiveSurface
+            accent="orange"
+            title={`OpenClaw & MCP Agent Bridge (${agentTools.length} Tools)`}
+            subtitle="Plug OpenClaw, Claude Desktop, or any MCP client into PuppyPi Pro in 30 seconds · Shared with live 'Hey OX' tool calling"
+            badge={
+              <Badge variant="default" className="font-mono text-[9px]">
+                <Plug className="h-2.5 w-2.5" />
+                STDIO MCP · 10 TOOLS
+              </Badge>
+            }
+            collapsible
+            defaultCollapsed
+          >
+            <div className="space-y-3.5">
+              {/* 10 Live Tool Badges */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-eigenia-muted">
+                    Registered Safe Robot Tools ({agentTools.length})
+                  </span>
+                  <span className="font-mono text-[10px] text-eigenia-sky">
+                    POST /api/agent/execute · python -m src.agent.mcp_bridge
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {agentTools.map((tool) => (
+                    <Badge
+                      key={tool.name}
+                      variant={tool.name === "stop_robot_estop" ? "fault" : "neutral"}
+                      title={tool.description}
+                      className="cursor-default border-white/15 bg-eigenia-obsidian px-2 py-0.5 font-mono text-[10px] text-eigenia-ink hover:border-eigenia-orange/50 hover:text-white"
+                    >
+                      <Wrench className="h-2.5 w-2.5 text-eigenia-orange" />
+                      {tool.name}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+
+              {/* Action Row: Test Tool + Copy mcp-config.json + Skill Path */}
+              <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-md border border-white/10 bg-eigenia-obsidian p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="default"
+                    disabled={testingAgentTool}
+                    onClick={() => void handleTestAgentStatusTool()}
+                    className="font-semibold"
+                  >
+                    {testingAgentTool ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Play className="h-3.5 w-3.5" />
+                    )}
+                    Test Tool (get_robot_status)
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    variant="sky"
+                    onClick={handleCopyMcpConfig}
+                  >
+                    {copiedMcpConfig ? (
+                      <Check className="h-3.5 w-3.5" />
+                    ) : (
+                      <Copy className="h-3.5 w-3.5" />
+                    )}
+                    {copiedMcpConfig ? "Copied mcp-config.json" : "Copy mcp-config.json"}
+                  </Button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5 font-mono text-[10px]">
+                  <span className="text-eigenia-muted">OpenClaw Skill:</span>
+                  <code className="rounded border border-white/10 bg-eigenia-shell px-2 py-1 text-eigenia-sky">
+                    {openClawBundle?.skill_path ?? "openclaw/skills/puppypi-twinscan/SKILL.md"}
+                  </code>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-2 text-[10px]"
+                    onClick={handleCopySkillPath}
+                    title="Copy OpenClaw skill path"
+                  >
+                    {copiedSkillPath ? (
+                      <Check className="h-3 w-3 text-emerald-400" />
+                    ) : (
+                      <Copy className="h-3 w-3" />
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Live Test Result Inline Box */}
+              {agentTestError && (
+                <div className="flex items-center gap-2 rounded-md border border-eigenia-fault/50 bg-eigenia-fault/15 px-3 py-2 font-mono text-[11px] text-eigenia-fault">
+                  <XCircle className="h-3.5 w-3.5 shrink-0" />
+                  <span>{agentTestError}</span>
+                </div>
+              )}
+
+              {agentTestResult && (
+                <div
+                  className={`space-y-2 rounded-md border p-3 font-mono text-[11px] ${
+                    agentTestResult.ok
+                      ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                      : "border-eigenia-fault/45 bg-eigenia-fault/10 text-red-200"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      {agentTestResult.ok ? (
+                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+                      ) : (
+                        <XCircle className="h-3.5 w-3.5 text-eigenia-fault" />
+                      )}
+                      <span className="font-semibold text-white">
+                        {agentTestResult.tool}
+                      </span>
+                      <Badge
+                        variant={agentTestResult.ok ? "sky" : "fault"}
+                        className={
+                          agentTestResult.ok
+                            ? "border-emerald-500/40 bg-emerald-500/15 text-[9px] text-emerald-300"
+                            : "text-[9px]"
+                        }
+                      >
+                        {agentTestResult.ok ? "OK" : "FAILED"}
+                      </Badge>
+                    </div>
+                    <span className="text-[10px] tabular-nums text-eigenia-muted">
+                      {agentTestResult.duration_ms} ms
+                      {agentTestResult.robot_id ? ` · ${agentTestResult.robot_id}` : ""}
+                    </span>
+                  </div>
+                  <div className="text-xs text-white">{agentTestResult.summary}</div>
+                  {agentTestResult.data &&
+                    Object.keys(agentTestResult.data).length > 0 && (
+                      <pre className="max-h-36 overflow-auto rounded border border-white/10 bg-eigenia-obsidian/90 p-2 text-[10px] leading-relaxed text-eigenia-ink">
+                        {JSON.stringify(agentTestResult.data, null, 2)}
+                      </pre>
+                    )}
+                </div>
+              )}
+
+              {/* Compact MCP Config Preview */}
+              <div className="space-y-1">
+                <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-eigenia-muted">
+                  <Terminal className="h-3 w-3 text-eigenia-orange" />
+                  <span>mcp-config.json (Zero-Dependency Stdio Bridge)</span>
+                </div>
+                <pre className="max-h-40 overflow-auto rounded-md border border-white/10 bg-eigenia-obsidian p-2.5 font-mono text-[10px] leading-relaxed text-eigenia-ink">
+                  {JSON.stringify(
+                    openClawBundle?.mcp_config ?? FALLBACK_MCP_CONFIG,
+                    null,
+                    2
+                  )}
+                </pre>
               </div>
             </div>
           </InteractiveSurface>

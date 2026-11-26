@@ -777,7 +777,111 @@ def offline_personality_fallback(
         "rgb": [224, 90, 16],
         "source": "offline_fallback",
         "model_used": "offline-personality",
+        "tool_calls": [],
     }
+
+
+def detect_offline_tool_intent(user_text: str) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """Deterministically route an offline voice utterance to a safe robot tool call.
+
+    Used when no OpenRouter API key is configured (or as a resilient offline fallback)
+    so ``"Hey OX"`` can still inspect live status, trigger emergency stop, explore rooms,
+    return to dock, capture 3D wall scans, and recall spatial memory locally.
+
+    Args:
+        user_text: Normalized or raw user utterance string.
+
+    Returns:
+        Tuple ``(tool_name, arguments_dict)`` if a high-confidence tool intent matched,
+        otherwise ``None``.
+    """
+    raw = str(user_text or "").strip()
+    low = raw.lower()
+    if not low:
+        return None
+
+    # 1. Safety E-STOP always takes highest precedence
+    if any(
+        phrase in low
+        for phrase in ("emergency stop", "e-stop", "estop", "stop now", "halt", "freeze right now", "abort motion")
+    ):
+        return ("stop_robot_estop", {})
+
+    # 2. Return-to-Home / Charger docking
+    if any(
+        phrase in low
+        for phrase in ("return to charger", "return to home", "return home", "go home", "back to dock", "dock yourself")
+    ) or re.search(r"\brth\b", low):
+        return ("return_to_home", {})
+
+    # 3. Autonomous frontier room exploration
+    if any(
+        phrase in low
+        for phrase in ("explore", "map the room", "map this room", "discover dark zones", "autonomous scan")
+    ):
+        m_ctx = re.search(r"(?:explore|map)\s+(?:the\s+|this\s+)?([a-z0-9 _\-]{2,40})", low)
+        ctx_str = m_ctx.group(1).strip(" .!?") if m_ctx else "room"
+        return ("start_autonomous_explore", {"space_context": ctx_str})
+
+    # 4. Zero-movement 3D wall scan
+    if any(
+        phrase in low
+        for phrase in ("scan this wall", "scan the wall", "3d scan", "3d wall", "capture 3d", "reconstruct wall")
+    ):
+        return ("scan_room_wall_3d", {})
+
+    # 5. Spatial memory recall
+    mem_match = re.search(
+        r"(?:where (?:did you see|is|are|'s)\s+(?:my\s+|the\s+|a\s+)?|"
+        r"(?:do you )?remember(?: seeing)?\s+(?:my\s+|the\s+|a\s+)?|"
+        r"find\s+(?:my\s+|the\s+))([a-z0-9 _\-]{2,40})",
+        low,
+    )
+    if mem_match or "spatial memory" in low or "remember" in low or "where did you see" in low:
+        query = mem_match.group(1).strip(" .?!,") if mem_match else ""
+        # Strip trailing filler words
+        query = re.sub(r"\b(earlier|today|last|please|recently|around here)\b", "", query).strip()
+        return ("recall_spatial_memory", {"query": query})
+
+    # 6. Live telemetry / battery / LiDAR status
+    if any(
+        phrase in low
+        for phrase in ("battery", "charge", "status", "lidar", "voltage", "how much power", "telemetry", "health check")
+    ):
+        return ("get_robot_status", {})
+
+    return None
+
+
+def _weave_tool_summary_into_reply(
+    personality_id: str,
+    assistant_name: str,
+    tool_name: str,
+    tool_res: Dict[str, Any],
+) -> str:
+    """Blend a structured robot tool summary cleanly into the active OX personality voice."""
+    summary = str(tool_res.get("summary") or "").strip()
+    if not summary:
+        summary = f"Completed {tool_name.replace('_', ' ')}."
+    ok = bool(tool_res.get("ok", True))
+    pid = str(personality_id or "dog").lower()
+    if not ok:
+        prefixes = {
+            "dog": "Ruff, I tried that but hit a snag. ",
+            "cat": "Hmph. That did not cooperate. ",
+            "marvin": "Naturally, it failed. ",
+            "nerd": "Minor runtime exception in the lab. ",
+            "lab_assistant": f"{assistant_name} reporting an issue. ",
+        }
+        return prefixes.get(pid, "") + summary
+    prefixes = {
+        "dog": "Woof! ",
+        "cat": "Fine, I checked for you. ",
+        "marvin": "If you insist. ",
+        "nerd": "Telemetry locked in! ",
+        "lab_assistant": "",
+    }
+    return prefixes.get(pid, "") + summary
 
 
 async def generate_conversational_reply(
@@ -789,8 +893,11 @@ async def generate_conversational_reply(
     camera_jpeg: Optional[bytes] = None,
     openrouter_api_key: str = "",
     openrouter_base_url: str = "https://openrouter.ai/api/v1",
+    tools: Optional[List[Dict[str, Any]]] = None,
+    tool_executor: Optional[Callable[[str, Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]]] = None,
+    max_tool_rounds: int = 3,
 ) -> Dict[str, Any]:
-    """Generate a personality-driven, embodied spoken response via OpenRouter (with offline fallback).
+    """Generate a personality-driven, embodied spoken response via OpenRouter (with tool calling & offline fallback).
 
     Args:
         user_text: Current user utterance.
@@ -801,20 +908,52 @@ async def generate_conversational_reply(
         camera_jpeg: Optional live PuppyPi FPV JPEG bytes for multimodal vision replies.
         openrouter_api_key: Effective OpenRouter API key.
         openrouter_base_url: OpenRouter API base URL.
+        tools: Optional list of OpenRouter/OpenAI function-calling tool schemas.
+        tool_executor: Optional async callback ``(tool_name, arguments) -> result_dict``.
+        max_tool_rounds: Maximum sequential tool-calling rounds per turn (clamped ``1..3``).
 
     Returns:
-        Dictionary ``{reply, action, rgb, source, model_used}``.
+        Dictionary ``{reply, action, rgb, source, model_used, tool_calls}``.
     """
     assistant_name = str(config.get("assistant_name") or "OX")
     pid = str(personality.get("id") or config.get("personality_id") or "dog")
     clean_key = (openrouter_api_key or "").strip()
-    if not clean_key or clean_key == "your_openrouter_api_key_here":
-        return offline_personality_fallback(
+
+    async def _run_offline_with_tools() -> Dict[str, Any]:
+        if tool_executor is not None:
+            matched = detect_offline_tool_intent(user_text)
+            if matched is not None:
+                t_name, t_args = matched
+                try:
+                    t_res = await tool_executor(t_name, t_args)
+                except Exception as exc:
+                    sys.stderr.write(f"[conversation.tools] Offline tool {t_name} failed: {exc}\n")
+                    t_res = {"ok": False, "summary": f"Tool {t_name} failed: {exc}", "data": {}}
+                executed_entry = {
+                    "tool": t_name,
+                    "arguments": t_args,
+                    "ok": bool(t_res.get("ok", True)),
+                    "summary": str(t_res.get("summary") or ""),
+                }
+                return {
+                    "reply": _weave_tool_summary_into_reply(pid, assistant_name, t_name, t_res),
+                    "action": None,
+                    "rgb": [16, 185, 129] if executed_entry["ok"] else [239, 68, 68],
+                    "source": "offline_tool",
+                    "model_used": "offline-tool-router",
+                    "tool_calls": [executed_entry],
+                }
+        fb = offline_personality_fallback(
             user_text=user_text,
             personality_id=pid,
             assistant_name=assistant_name,
             live_context=live_context,
         )
+        fb.setdefault("tool_calls", [])
+        return fb
+
+    if not clean_key or clean_key == "your_openrouter_api_key_here":
+        return await _run_offline_with_tools()
 
     ctx = live_context or {}
     raw_sys = str(personality.get("system_prompt") or f"You are {assistant_name}, a helpful PuppyPi robot.")
@@ -844,9 +983,17 @@ async def generate_conversational_reply(
         f"{sightings_summary}"
     )
 
+    tool_hint = (
+        "\nYou have live robot tools available. Call a tool whenever the user asks to inspect live telemetry, "
+        "search spatial memory, scan a wall in 3D, start exploration, return home, or emergency stop. "
+        "After receiving tool results, reply concisely in character."
+        if (tools and tool_executor is not None)
+        else ""
+    )
+
     full_system = (
         f"{rendered_sys}\n"
-        f"{telemetry_line}\n"
+        f"{telemetry_line}{tool_hint}\n"
         "Respond ONLY with a compact JSON object matching: "
         '{"reply": "<1 to 3 concise natural spoken sentences, NO markdown, NO asterisks, NO emojis>", '
         '"action": "<action_name_or_none>", "rgb": [r, g, b] or null}.\n'
@@ -878,44 +1025,133 @@ async def generate_conversational_reply(
 
     model = str(config.get("llm_model") or "google/gemini-2.5-flash")
     root = (openrouter_base_url or "https://openrouter.ai/api/v1").rstrip("/")
-    body = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": 260,
-        "temperature": 0.75,
-    }
+    use_tools = bool(tools and tool_executor is not None)
+    safe_max_rounds = max(1, min(3, int(max_tool_rounds)))
+    executed_log: List[Dict[str, Any]] = []
 
-    for attempt in range(1, 4):
-        try:
-            async with httpx.AsyncClient(timeout=22.0) as client:
-                resp = await client.post(
-                    f"{root}/chat/completions",
-                    headers={"Authorization": f"Bearer {clean_key}", "Content-Type": "application/json"},
-                    json=body,
-                )
-                resp.raise_for_status()
-                content = resp.json()["choices"][0]["message"]["content"]
-                parsed = parse_structured_llm_reply(content)
-                if not parsed["reply"]:
-                    raise RuntimeError("Empty reply from OpenRouter")
-                if not allow_actions:
-                    parsed["action"] = None
-                return {
-                    **parsed,
-                    "source": "openrouter",
-                    "model_used": model,
+    async def _post_openrouter(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        for attempt in range(1, 4):
+            try:
+                async with httpx.AsyncClient(timeout=22.0) as client:
+                    resp = await client.post(
+                        f"{root}/chat/completions",
+                        headers={"Authorization": f"Bearer {clean_key}", "Content-Type": "application/json"},
+                        json=payload,
+                    )
+                    resp.raise_for_status()
+                    return resp.json()
+            except Exception as exc:
+                sys.stderr.write(f"[conversation.llm] OpenRouter attempt {attempt}/3 failed: {exc}\n")
+                if attempt < 3:
+                    await asyncio.sleep(0.4 * attempt)
+        return None
+
+    # Allow up to `safe_max_rounds` tool execution rounds + 1 final spoken synthesis round
+    total_passes = (safe_max_rounds + 1) if use_tools else 1
+    for pass_idx in range(total_passes):
+        allow_tool_calls_this_pass = use_tools and (pass_idx < safe_max_rounds)
+        body: Dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": 260,
+            "temperature": 0.75,
+        }
+        if allow_tool_calls_this_pass and tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+
+        resp_json = await _post_openrouter(body)
+        if not resp_json:
+            break
+
+        choices = resp_json.get("choices") or []
+        if not choices:
+            break
+        choice_msg = choices[0].get("message") or {}
+        pending_calls = choice_msg.get("tool_calls") or []
+
+        if allow_tool_calls_this_pass and pending_calls and tool_executor is not None:
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": choice_msg.get("content") or "",
+                    "tool_calls": pending_calls,
                 }
-        except Exception as exc:
-            sys.stderr.write(f"[conversation.llm] OpenRouter attempt {attempt}/3 failed: {exc}\n")
-            if attempt < 3:
-                await asyncio.sleep(0.4 * attempt)
+            )
+            for tc_idx, tc in enumerate(pending_calls):
+                fn_obj = tc.get("function") or {}
+                fn_name = str(fn_obj.get("name") or "").strip()
+                raw_args = fn_obj.get("arguments")
+                if isinstance(raw_args, dict):
+                    fn_args = raw_args
+                elif isinstance(raw_args, str) and raw_args.strip():
+                    try:
+                        parsed_args = json.loads(raw_args)
+                        fn_args = parsed_args if isinstance(parsed_args, dict) else {}
+                    except json.JSONDecodeError:
+                        fn_args = {}
+                else:
+                    fn_args = {}
 
-    return offline_personality_fallback(
-        user_text=user_text,
-        personality_id=pid,
-        assistant_name=assistant_name,
-        live_context=live_context,
-    )
+                try:
+                    t_res = await tool_executor(fn_name, fn_args)
+                except Exception as exc:
+                    sys.stderr.write(f"[conversation.tools] Tool {fn_name} raised error: {exc}\n")
+                    t_res = {"ok": False, "summary": f"Tool {fn_name} failed: {exc}", "data": {}}
+
+                entry = {
+                    "tool": fn_name,
+                    "arguments": fn_args,
+                    "ok": bool(t_res.get("ok", True)),
+                    "summary": str(t_res.get("summary") or ""),
+                }
+                executed_log.append(entry)
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": str(tc.get("id") or f"call_{pass_idx}_{tc_idx}"),
+                        "name": fn_name,
+                        "content": json.dumps(
+                            {
+                                "ok": entry["ok"],
+                                "summary": entry["summary"],
+                                "data": t_res.get("data") if isinstance(t_res, dict) else {},
+                            }
+                        ),
+                    }
+                )
+            continue
+
+        content = str(choice_msg.get("content") or "")
+        parsed = parse_structured_llm_reply(content)
+        if not parsed["reply"]:
+            if executed_log:
+                parsed["reply"] = _weave_tool_summary_into_reply(
+                    pid, assistant_name, executed_log[-1]["tool"], executed_log[-1]
+                )
+            else:
+                break
+        if not allow_actions:
+            parsed["action"] = None
+        return {
+            **parsed,
+            "source": "openrouter",
+            "model_used": model,
+            "tool_calls": executed_log,
+        }
+
+    if executed_log:
+        last_entry = executed_log[-1]
+        return {
+            "reply": _weave_tool_summary_into_reply(pid, assistant_name, last_entry["tool"], last_entry),
+            "action": None,
+            "rgb": [16, 185, 129] if last_entry["ok"] else [239, 68, 68],
+            "source": "openrouter_tool_fallback",
+            "model_used": model,
+            "tool_calls": executed_log,
+        }
+
+    return await _run_offline_with_tools()
 
 
 class RobotConversationManager:
@@ -984,8 +1220,10 @@ class RobotConversationManager:
         fetch_camera_fn: Optional[Callable[[], Coroutine[Any, Any, Optional[bytes]]]] = None,
         execute_action_fn: Optional[Callable[[Optional[str], Optional[List[int]]], Coroutine[Any, Any, Optional[str]]]] = None,
         speak_fn: Optional[Callable[[str, Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_executor: Optional[Callable[[str, Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]]] = None,
     ) -> Dict[str, Any]:
-        """Run one complete conversational turn: memory -> optional vision -> LLM -> body action -> Piper TTS -> DB log."""
+        """Run one complete conversational turn: memory -> optional vision -> LLM/tools -> body action -> Piper TTS -> DB log."""
         t0 = time.perf_counter()
         clean_msg = str(user_text or "").strip()
         if not clean_msg:
@@ -1027,11 +1265,14 @@ class RobotConversationManager:
             camera_jpeg=camera_jpeg,
             openrouter_api_key=openrouter_api_key,
             openrouter_base_url=openrouter_base_url,
+            tools=tools,
+            tool_executor=tool_executor,
         )
 
         reply = str(llm_res.get("reply") or "")
         action_name = llm_res.get("action")
         rgb_val = llm_res.get("rgb")
+        tool_calls = list(llm_res.get("tool_calls") or [])
         action_taken: Optional[str] = None
 
         allow_act = execute_actions and bool(config.get("allow_body_actions", True)) and bool(
@@ -1054,6 +1295,9 @@ class RobotConversationManager:
                 voice_used = str(sp.get("voice") or config.get("default_voice") or DEFAULT_PIPER_VOICE)
             except Exception as exc:
                 sys.stderr.write(f"[conversation.tts] Speaking reply failed: {exc}\n")
+
+        if not action_taken and tool_calls:
+            action_taken = "tools:" + ",".join(str(tc.get("tool") or "") for tc in tool_calls if tc.get("tool"))
 
         latency_ms = int((time.perf_counter() - t0) * 1000)
         assistant_turn = ai_store.record_conversation_turn(
@@ -1094,6 +1338,7 @@ class RobotConversationManager:
             "voice_used": voice_used,
             "latency_ms": latency_ms,
             "source": str(llm_res.get("source") or "offline_fallback"),
+            "tool_calls": tool_calls,
         }
 
     async def start(

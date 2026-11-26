@@ -35,6 +35,47 @@ export interface VoicePersonality {
   updated_at?: string | null;
 }
 
+export interface VoiceToolCall {
+  tool: string;
+  arguments?: Record<string, unknown>;
+  ok: boolean;
+  summary: string;
+  data?: Record<string, unknown>;
+  duration_ms?: number;
+}
+
+export interface AgentToolSchema {
+  name: string;
+  description: string;
+  inputSchema?: Record<string, unknown>;
+  parameters?: Record<string, unknown>;
+}
+
+export interface AgentToolsResponse {
+  count: number;
+  openrouter_tools: Record<string, unknown>[];
+  mcp_tools: AgentToolSchema[];
+}
+
+export interface AgentExecuteResult {
+  ok: boolean;
+  tool: string;
+  robot_id: string | null;
+  summary: string;
+  data: Record<string, unknown>;
+  duration_ms: number;
+}
+
+export interface OpenClawBundle {
+  api_url: string;
+  robot_id: string | null;
+  robot_name: string | null;
+  tool_count: number;
+  skill_path: string;
+  mcp_config: Record<string, unknown>;
+  install_commands: string[];
+}
+
 export interface ConversationTurn {
   id: string;
   robot_id: string;
@@ -46,6 +87,7 @@ export interface ConversationTurn {
   camera_attached?: boolean;
   engine_used?: string | null;
   latency_ms?: number | null;
+  tool_calls?: VoiceToolCall[];
   created_at: string;
 }
 
@@ -84,6 +126,7 @@ export interface VoiceChatResponse {
   voice_used?: string | null;
   latency_ms: number;
   source: string;
+  tool_calls?: VoiceToolCall[];
 }
 
 export interface VoiceDiagnosticCheck {
@@ -533,5 +576,71 @@ export async function runVoiceDiagnostics(
     checks: Array.isArray(data.checks) ? data.checks : [],
     dmesg_usb_warnings: Array.isArray(data.dmesg_usb_warnings) ? data.dmesg_usb_warnings : [],
     usb_devices: Array.isArray(data.usb_devices) ? data.usb_devices : [],
+  };
+}
+
+// --- OpenClaw & MCP Unified Robot Agent Tool Bridge ---
+
+export async function getAgentTools(): Promise<AgentToolsResponse> {
+  const data = await requestVoiceJson<Partial<AgentToolsResponse>>(
+    "/api/agent/tools",
+    undefined,
+    3
+  );
+  const mcpTools = Array.isArray(data.mcp_tools) ? data.mcp_tools : [];
+  const openrouterTools = Array.isArray(data.openrouter_tools) ? data.openrouter_tools : [];
+  return {
+    count: typeof data.count === "number" ? data.count : mcpTools.length,
+    openrouter_tools: openrouterTools,
+    mcp_tools: mcpTools,
+  };
+}
+
+export async function executeAgentTool(
+  tool: string,
+  args: Record<string, unknown> = {},
+  robotId?: string | null
+): Promise<AgentExecuteResult> {
+  return requestVoiceJson<AgentExecuteResult>(
+    "/api/agent/execute",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tool,
+        arguments: args,
+        ...(robotId ? { robot_id: robotId } : {}),
+      }),
+    },
+    1
+  );
+}
+
+export async function getOpenClawBundle(robotId?: string | null): Promise<OpenClawBundle> {
+  const qs = robotId ? `?robot_id=${encodeURIComponent(robotId)}` : "";
+  const data = await requestVoiceJson<Partial<OpenClawBundle>>(
+    `/api/agent/openclaw-bundle${qs}`,
+    undefined,
+    3
+  );
+  return {
+    api_url: data.api_url ?? API_URL,
+    robot_id: data.robot_id ?? robotId ?? null,
+    robot_name: data.robot_name ?? null,
+    tool_count: typeof data.tool_count === "number" ? data.tool_count : 10,
+    skill_path: data.skill_path ?? "openclaw/skills/puppypi-twinscan/SKILL.md",
+    mcp_config:
+      data.mcp_config && typeof data.mcp_config === "object"
+        ? data.mcp_config
+        : {
+            mcpServers: {
+              "puppypi-twinscan": {
+                command: ".venv/bin/python",
+                args: ["-m", "src.agent.mcp_bridge"],
+                env: { TWINSCAN_API_URL: API_URL || "http://localhost:8000" },
+              },
+            },
+          },
+    install_commands: Array.isArray(data.install_commands) ? data.install_commands : [],
   };
 }

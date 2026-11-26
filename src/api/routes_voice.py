@@ -445,13 +445,56 @@ async def delete_voice_personality(personality_id: str, request: Request) -> Dic
     return {"deleted": True}
 
 
+_VOICE_EXCLUDED_TOOLS = frozenset({"chat_as_ox", "speak_aloud"})
+
+
+def _build_voice_tool_bridge(request: Request, robot_id: str):
+    """Build OpenRouter tool schemas and an async executor for voice turns (excluding recursive tools).
+
+    Excludes ``chat_as_ox`` (prevents recursion) and ``speak_aloud`` (prevents double-speaking
+    since ``process_chat_turn`` speaks the final assistant reply via Piper TTS).
+
+    Args:
+        request: Active FastAPI request carrying ``request.app``.
+        robot_id: Target robot identifier.
+
+    Returns:
+        Tuple ``(filtered_tool_schemas, async_tool_executor)``.
+    """
+    try:
+        from src.agent.robot_tools import execute_robot_tool, get_openrouter_tool_schemas
+    except Exception as exc:
+        sys.stderr.write(f"[voice.tools] Robot tool registry unavailable: {exc}\n")
+        return [], None
+
+    raw_schemas = get_openrouter_tool_schemas()
+    voice_tools = [
+        schema
+        for schema in raw_schemas
+        if str((schema.get("function") or {}).get("name") or "") not in _VOICE_EXCLUDED_TOOLS
+    ]
+
+    async def _exec_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        if tool_name in _VOICE_EXCLUDED_TOOLS:
+            return {
+                "ok": False,
+                "tool": tool_name,
+                "robot_id": robot_id,
+                "summary": f"Tool {tool_name} is disabled inside voice conversation turns to prevent recursion.",
+                "data": {},
+            }
+        return await execute_robot_tool(request.app, tool_name, arguments or {}, robot_id=robot_id)
+
+    return voice_tools, _exec_tool
+
+
 @router.post("/api/robots/{robot_id}/voice/chat")
 async def robot_voice_chat(
     robot_id: str,
     body: VoiceChatRequest,
     request: Request,
 ) -> Dict[str, Any]:
-    """Run one embodied multi-turn conversational turn with personality, optional camera vision, actions, and TTS."""
+    """Run one embodied multi-turn conversational turn with personality, optional camera vision, tools, actions, and TTS."""
     store = _robot_store(request)
     robot = _require_robot(store, robot_id)
     ssh_pw = store.get_robot_ssh_password(robot_id)
@@ -461,6 +504,7 @@ async def robot_voice_chat(
 
     cfg, pers = _resolve_config_and_personality(ai_store, robot_id)
     fetch_cam, exec_act, speak_fn = _build_conversation_callbacks(request, robot, ssh_pw)
+    voice_tools, tool_exec = _build_voice_tool_bridge(request, robot_id)
     batt_mv = robot.get("battery_mv")
     live_ctx = {
         "ros_mode": str(robot.get("active_ros_distro") or "ROS 2 Humble"),
@@ -485,6 +529,8 @@ async def robot_voice_chat(
             fetch_camera_fn=fetch_cam,
             execute_action_fn=exec_act,
             speak_fn=speak_fn,
+            tools=voice_tools if body.execute_actions else None,
+            tool_executor=tool_exec if body.execute_actions else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -500,6 +546,7 @@ async def start_robot_conversation(robot_id: str, request: Request) -> Dict[str,
     rt = _runtime(request)
     conv_mgr = _conversation_manager(request)
     fetch_cam, exec_act, speak_fn = _build_conversation_callbacks(request, robot, ssh_pw)
+    voice_tools, tool_exec = _build_voice_tool_bridge(request, robot_id)
 
     async def _run_turn(utterance: str) -> Dict[str, Any]:
         cfg, pers = _resolve_config_and_personality(ai_store, robot_id)
@@ -526,6 +573,8 @@ async def start_robot_conversation(robot_id: str, request: Request) -> Dict[str,
             fetch_camera_fn=fetch_cam,
             execute_action_fn=exec_act,
             speak_fn=speak_fn,
+            tools=voice_tools,
+            tool_executor=tool_exec,
         )
 
     return await conv_mgr.start(

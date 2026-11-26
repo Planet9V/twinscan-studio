@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "eigenia-puppypi": {
+      "command": ".venv/bin/python",
+      "args": [
+        "-m",
+        "src.agent.mcp_bridge"
+      ],
+      "env": {
+        "TWINSCAN_API_URL": "http://localhost:8000"
+      }
+    }
+  }
+}

@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.routes_admin import router as admin_router
+from src.api.routes_agent import router as agent_router
 from src.api.routes_ai_vision import router as ai_vision_router
 from src.api.routes_devices import router as devices_router
 from src.api.routes_enrichment import router as enrichment_router
@@ -228,6 +229,7 @@ def create_app(
     app.include_router(ai_vision_router)
     app.include_router(devices_router)
     app.include_router(wiki_router)
+    app.include_router(agent_router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, Any]:

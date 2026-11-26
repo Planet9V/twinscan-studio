@@ -11,6 +11,7 @@
 [![PostgreSQL 18 + pgvector](https://img.shields.io/badge/PostgreSQL-18%20%2B%20pgvector-336791?style=flat-square&logo=postgresql&logoColor=white)](docker-compose.yml)
 [![Neo4j 5](https://img.shields.io/badge/Neo4j-5%20Graph-008CC1?style=flat-square&logo=neo4j&logoColor=white)](src/graph/neo4j_store.py)
 [![Tests](https://img.shields.io/badge/pytest-160%20passing-10B981?style=flat-square)](tests)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)](LICENSE)
 
 [Quick Start](#quick-start-3-commands) · [Live Screenshots](#inside-the-studio) · [Flagship PuppyPi Pro Example](#flagship-example-hiwonder-puppypi-pro) · [Architecture](#system-architecture) · [Full Wiki (`docs/wiki/`)](docs/wiki/README.md) · [Early Bird Founders](#early-bird-maker-founders-50-spots)
 
@@ -264,3 +265,9 @@ No. FPV streaming, YOLO11n object detection, Face ID, Spatial Memory, `piper-tts
 
 **What happens when I power-cycle a PuppyPi after switching to ROS 2?**
 Switching to ROS 2 in `/config` installs `/etc/systemd/system/start_node_ros2.service`, updates Docker restart policies (`puppypi_ros2=always`, `puppypi=no`), and leaves the stock ROS 1 service intact for one-click rollback. After a reboot, the backend's ROSBridge client reconnects automatically via its 6-second silence watchdog.
+
+---
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE).

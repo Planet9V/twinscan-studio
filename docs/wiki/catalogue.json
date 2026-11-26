@@ -1,0 +1,132 @@
+{
+  "project": "Eigenia TwinScan — Robotics, LiDAR & Spatial Digital Twin Platform",
+  "flagship_hardware": "Hiwonder PuppyPi Pro (Raspberry Pi 5 8 GB + LD19 360° ToF LiDAR + icSpring UVC Camera + WonderEcho Pro + 2S LiPo + ROS 2 Humble)",
+  "primary_language": "Python",
+  "comparison_language": "TypeScript",
+  "version": "1.0.0",
+  "items": [
+    {
+      "title": "Onboarding",
+      "name": "onboarding",
+      "collapsed": false,
+      "prompt": "Provide dense principal-level architectural insights and a progressive zero-to-hero learning path grounded in src/app/factory.py:119, src/api/state.py:76, and frontend/src/context/StudioContext.tsx:130.",
+      "children": [
+        {
+          "title": "Principal-Level Architecture Guide",
+          "name": "01-onboarding-principal",
+          "file": "01-onboarding-principal.md",
+          "prompt": "Explain the core cyber-physical offloading insight with TypeScript pseudocode, system Mermaid and ER diagrams, tradeoffs, and reading order citing src/app/factory.py:119, src/api/state.py:76, src/robot/rosbridge_proxy.py:254, src/lidar/scene_reconstructor.py:1043, src/db/robot_ai_store.py:1196, and src/robot/explorer_engine.py:238.",
+          "children": []
+        },
+        {
+          "title": "Zero-to-Hero Learning Path & 45+ Term Glossary",
+          "name": "02-onboarding-zero-to-hero",
+          "file": "02-onboarding-zero-to-hero.md",
+          "prompt": "Walk newcomers from Python/TypeScript/ROS 2/Three.js/React Flow foundations through TwinScan architecture, local Docker setup, pytest/Playwright verification, and a 45+ term glossary citing docker-compose.yml:1, src/app/config.py:11, src/lidar/ld19_parser.py:48, src/vision/robot_ai_vision.py:274, and frontend/src/components/layout/EigeniaShell.tsx:67.",
+          "children": []
+        }
+      ]
+    },
+    {
+      "title": "Getting Started",
+      "name": "getting-started",
+      "collapsed": false,
+      "prompt": "Introduce Eigenia TwinScan's maker-first local-first philosophy, hardware ecosystem, and day-one Hiwonder PuppyPi Pro directions citing src/devices/envelope.py:272, src/api/routes_robots.py:433, and frontend/src/components/MissionControlLanding.tsx:37.",
+      "children": [
+        {
+          "title": "Wiki Index & Persona Reading Paths",
+          "name": "README",
+          "file": "README.md",
+          "prompt": "Index all 10 documentation guides with persona reading paths (Maker, Principal IC, Fleet Admin, Developer, Support) citing src/app/factory.py:119, src/devices/envelope.py:272, src/lidar/scene_reconstructor.py:1043, src/robot/pi5_diagnostics.py:192, and frontend/src/components/layout/EigeniaShell.tsx:67.",
+          "children": []
+        },
+        {
+          "title": "Introduction & Hardware Ecosystem",
+          "name": "00-introduction",
+          "file": "00-introduction.md",
+          "prompt": "Explain Eigenia TwinScan's 100% local cloud-free maker vision and 6 hardware profiles anchored on Hiwonder PuppyPi Pro, citing src/devices/envelope.py:272, src/devices/microbit_bridge.py:113, src/devices/local_camera_bridge.py:40, src/lidar/ld19_parser.py:228, and docker-compose.yml:1.",
+          "children": []
+        },
+        {
+          "title": "User Directions & PuppyPi Pro Operating Guide",
+          "name": "04-user-directions",
+          "file": "04-user-directions.md",
+          "prompt": "Step-by-step Hiwonder PuppyPi Pro operator handbook covering discovery, 3D room fusion, autonomous exploration with low-battery RTH and AprilTag #0, E-STOP safety, Spatial Memory curation, and Lab Architect citing src/api/routes_robots.py:1013, src/api/routes_twin.py:709, src/robot/explorer_engine.py:40, src/robot/patrol_engine.py:38, and src/ai/lab_architect.py:156.",
+          "children": []
+        }
+      ]
+    },
+    {
+      "title": "Deep Dive",
+      "name": "deep-dive",
+      "collapsed": false,
+      "prompt": "Document every subsystem, admin workflow, developer API, troubleshooting runbook, and full UI/API site tree citing src/lidar/composite_enhancer.py:61, src/robot/explorer_engine.py:238, src/robot/ssh_manager.py:536, and frontend/src/components/layout/EigeniaShell.tsx:67.",
+      "children": [
+        {
+          "title": "Capabilities Deep-Dive",
+          "name": "03-capabilities-guide",
+          "file": "03-capabilities-guide.md",
+          "prompt": "Deep dive into 5-pass 3D camera+LD19+Depth V2 fusion, dual Three.js/Babylon.js rendering, autonomous patrol/explorer/RTH, Spatial Memory Pro + YOLO11n + SFace + Sentry, WonderEcho/OX voice, Lab Architect 5-tier co-design, Pi 5 3D BOM twin, and Neo4j+pgvector citing src/lidar/composite_enhancer.py:61, src/lidar/scene_reconstructor.py:744, src/robot/conversation_engine.py:921, src/robot/pi5_diagnostics.py:192, and src/graph/neo4j_store.py:184.",
+          "children": [
+            {
+              "title": "3D Camera + LD19 + Depth V2 Fusion",
+              "name": "cap-3d-fusion",
+              "file": "03-capabilities-guide.md",
+              "prompt": "Trace 5-pass composite enhancement, guided depth filtering, PBR normal baking, and combined .glb export in src/lidar/composite_enhancer.py:126 and src/lidar/scene_reconstructor.py:744.",
+              "children": []
+            },
+            {
+              "title": "Autonomous Patrol, Explorer & Low-Battery RTH",
+              "name": "cap-autonomy",
+              "file": "03-capabilities-guide.md",
+              "prompt": "Trace VFH obstacle avoidance, frontier dark-zone scoring, IMU yaw anchoring, and AprilTag #0 RTH in src/robot/patrol_engine.py:38 and src/robot/explorer_engine.py:93.",
+              "children": []
+            },
+            {
+              "title": "AI Vision, Spatial Memory Pro & Voice Assistant",
+              "name": "cap-vision-voice",
+              "file": "03-capabilities-guide.md",
+              "prompt": "Trace YuNet/SFace/YOLO11n/AprilTag inference, Sentry Guard, and Piper/Whisper OX conversation loop in src/vision/robot_ai_vision.py:274, src/robot/sentry_manager.py:75, and src/robot/conversation_engine.py:921.",
+              "children": []
+            },
+            {
+              "title": "Lab Architect & Universal Hardware Envelope",
+              "name": "cap-architect",
+              "file": "03-capabilities-guide.md",
+              "prompt": "Trace 5-tier creativity co-design, 6 device profiles, micro:bit USB bridge, and cloud-free Pi Zero clip harvesting in src/ai/lab_architect.py:156, src/devices/envelope.py:272, and src/devices/local_camera_bridge.py:40.",
+              "children": []
+            }
+          ]
+        },
+        {
+          "title": "Admin & Fleet Operations Guide",
+          "name": "05-admin-guide",
+          "file": "05-admin-guide.md",
+          "prompt": "Document Docker Compose operations, PG18+pgvector and Neo4j 5 persistence, ROS 1 to ROS 2 persistent auto-boot systemd service, Pi 5 PMIC/USB power budget, stale log cleanup, Fernet secret encryption, and 2nd Pi 5 workbench setup citing docker-compose.yml:1, src/db/crypto.py:35, src/robot/ssh_manager.py:536, src/robot/ssh_manager.py:2556, and src/robot/pi5_diagnostics.py:192.",
+          "children": []
+        },
+        {
+          "title": "Developer Architecture & API Reference",
+          "name": "06-developer-guide",
+          "file": "06-developer-guide.md",
+          "prompt": "Detail backend src/ and frontend/src/ architecture, full FastAPI REST/WS router catalog, ROSBridge auto-type watchdog, stdlib PTY SSH runner, pytest suite, and Senior Architect + Tailwind/shadcn engineering standards citing src/app/factory.py:119, src/api/routes_twin.py:36, src/api/routes_robots.py:67, src/robot/ssh_manager.py:746, and frontend/src/lib/api.ts:21.",
+          "children": []
+        },
+        {
+          "title": "Support & Troubleshooting Runbook",
+          "name": "07-support-troubleshooting",
+          "file": "07-support-troubleshooting.md",
+          "prompt": "Battle-tested PuppyPi Pro failure runbook covering LD19 charge-only vs 4-wire data USB cable, Linux 15-char pkill duplicate ldlidar fix, WonderEcho black USB 2.0 port 1-2 stability, /dev/video0 and /tmp log permissions, ROSBridge reconnect watchdog, and low-battery RTH citing src/robot/ssh_manager.py:2327, src/robot/ssh_manager.py:2431, src/robot/pi5_diagnostics.py:192, src/robot/patrol_engine.py:316, and src/robot/voice_manager.py:780.",
+          "children": []
+        },
+        {
+          "title": "Complete UI & API Site Tree",
+          "name": "08-site-tree",
+          "file": "08-site-tree.md",
+          "prompt": "Exhaustive map of all 12 Next.js routes (/welcome through /wiki), URL query tabs, slide-over drawers, Cmd+K command palette actions, and all 9 backend FastAPI routers citing frontend/src/components/layout/EigeniaShell.tsx:67, frontend/src/components/layout/CommandPalette.tsx:50, src/app/factory.py:119, src/api/routes_devices.py:30, and src/api/routes_ai_vision.py:36.",
+          "children": []
+        }
+      ]
+    }
+  ]
+}

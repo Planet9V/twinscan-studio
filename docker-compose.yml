@@ -1,0 +1,90 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg18
+    container_name: eigenia-twinscan-pg18
+    shm_size: 1g
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-eigenia_twinscan}
+      POSTGRES_USER: ${POSTGRES_USER:-twinscan}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-twinscan_dev_secret}
+    ports:
+      - "5438:5432"
+    volumes:
+      - pg18_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-twinscan} -d ${POSTGRES_DB:-eigenia_twinscan}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  neo4j:
+    image: neo4j:5-community
+    container_name: eigenia-twinscan-neo4j
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-twinscan_graph_secret}
+      NEO4J_PLUGINS: '[]'
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: eigenia-twinscan-backend
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-twinscan}:${POSTGRES_PASSWORD:-twinscan_dev_secret}@postgres:5432/${POSTGRES_DB:-eigenia_twinscan}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-twinscan_graph_secret}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_DEFAULT_VISION_MODEL: ${OPENROUTER_DEFAULT_VISION_MODEL:-google/gemini-2.5-flash}
+      OPENROUTER_SECONDARY_VISION_MODEL: ${OPENROUTER_SECONDARY_VISION_MODEL:-qwen/qwen2.5-vl-72b-instruct}
+      OPENROUTER_RESEARCH_MODEL: ${OPENROUTER_RESEARCH_MODEL:-perplexity/sonar-pro}
+      OPENROUTER_EMBEDDING_MODEL: ${OPENROUTER_EMBEDDING_MODEL:-openai/text-embedding-3-small}
+      TWINSCAN_ENCRYPTION_KEY: ${TWINSCAN_ENCRYPTION_KEY:-}
+      TWINSCAN_ADMIN_TOKEN: ${TWINSCAN_ADMIN_TOKEN:-}
+      TWINSCAN_STORAGE_DIR: /app/data
+      TWINSCAN_MODELS_DIR: /app/data/models
+    ports:
+      - "8000:8000"
+    volumes:
+      - backend_data:/app/data
+      - twinscan_models:/app/data/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../Dockerfile.frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000}
+    container_name: eigenia-twinscan-frontend
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  pg18_data:
+  neo4j_data:
+  backend_data:
+  twinscan_models:

@@ -237,15 +237,21 @@ def test_voice_chat_endpoint_returns_tool_calls_and_excludes_recursive_tools() -
     assert data["tool_calls"][0]["tool"] == "get_robot_status"
     assert data["tool_calls"][0]["ok"] is True
 
-    # Confirm voice tool bridge exposes 8 non-recursive tools (excludes chat_as_ox and speak_aloud)
+    # Confirm voice tool bridge exposes 14 non-recursive tools (excludes chat_as_ox and speak_aloud)
     from src.api.routes_voice import _build_voice_tool_bridge
 
     fake_req = MagicMock()
     fake_req.app = client.app
     tools, _ = _build_voice_tool_bridge(fake_req, robot_id)
     tool_names = {(t.get("function") or {}).get("name") for t in tools}
-    assert len(tools) == 8
+    assert len(tools) == 14
     assert "chat_as_ox" not in tool_names
     assert "speak_aloud" not in tool_names
     assert "get_robot_status" in tool_names
     assert "stop_robot_estop" in tool_names
+    assert "search_web_live" in tool_names
+    assert "remember_fact" in tool_names
+    assert "recall_facts" in tool_names
+    assert "walk_distance" in tool_names
+    assert "turn_angle" in tool_names
+    assert "get_overwatch_view" in tool_names

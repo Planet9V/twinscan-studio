@@ -107,7 +107,7 @@ def test_http_mcp_jsonrpc_and_bearer_auth_enforcement(client: TestClient) -> Non
 
     r_list = client.post("/api/agent/mcp", json={"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     assert r_list.status_code == 200
-    assert len(r_list.json()["result"]["tools"]) == 10
+    assert len(r_list.json()["result"]["tools"]) == 16
 
     r_call = client.post(
         "/api/agent/mcp",
@@ -147,7 +147,7 @@ def test_http_mcp_jsonrpc_and_bearer_auth_enforcement(client: TestClient) -> Non
     ok_hdr = {"Authorization": f"Bearer {token}"}
     r_mcp_ok = client.post("/api/agent/mcp", headers=ok_hdr, json={"jsonrpc": "2.0", "id": 7, "method": "tools/list"})
     assert r_mcp_ok.status_code == 200
-    assert len(r_mcp_ok.json()["result"]["tools"]) == 10
+    assert len(r_mcp_ok.json()["result"]["tools"]) == 16
 
     r_exec_ok = client.post("/api/agent/execute", headers=ok_hdr, json={"tool": "get_robot_status"})
     assert r_exec_ok.status_code == 200

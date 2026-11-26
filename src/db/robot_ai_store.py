@@ -11,11 +11,12 @@ managing four normalized tables:
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Protocol, Sequence
+from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
 
 import numpy as np
 import psycopg
@@ -301,6 +302,38 @@ class RobotAiStoreProtocol(Protocol):
         """Return Early Bird campaign status, remaining spots, perks, and anonymized recent makers."""
         ...
 
+    def store_episodic_memory(
+        self,
+        robot_id: str,
+        fact: str,
+        category: str = "general",
+        tags: Optional[Sequence[str]] = None,
+        source: str = "voice",
+    ) -> Dict[str, Any]:
+        """Persist a long-term episodic memory fact for ``robot_id``."""
+        ...
+
+    def search_episodic_memories(
+        self,
+        query: Optional[str] = None,
+        robot_id: Optional[str] = None,
+        limit: int = 8,
+    ) -> List[Dict[str, Any]]:
+        """Search persisted episodic memories by keyword/tag/category."""
+        ...
+
+    def list_episodic_memories(
+        self,
+        robot_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """List episodic memories ordered newest first."""
+        ...
+
+    def delete_episodic_memory(self, memory_id: str) -> bool:
+        """Delete an episodic memory record by ID."""
+        ...
+
 
 EARLY_BIRD_MAX_SPOTS = 50
 
@@ -404,6 +437,7 @@ class InMemoryRobotAiStore:
         self._managed_devices: Dict[str, Dict[str, Any]] = {}
         self._design_blueprints: Dict[str, Dict[str, Any]] = {}
         self._early_bird_signups: List[Dict[str, Any]] = []
+        self._episodic_memories: Dict[str, Dict[str, Any]] = {}
         self._seed_builtins()
 
     def _seed_builtins(self) -> None:
@@ -1308,6 +1342,114 @@ class InMemoryRobotAiStore:
             "recent_makers": self.list_early_bird_signups(limit=12),
         }
 
+    # --- Episodic Long-Term Agent Memories (In-Memory) ---
+
+    def store_episodic_memory(
+        self,
+        robot_id: str,
+        fact: str,
+        category: str = "general",
+        tags: Optional[Sequence[str]] = None,
+        source: str = "voice",
+    ) -> Dict[str, Any]:
+        """Persist a long-term episodic memory fact in memory.
+
+        Args:
+            robot_id: Robot identifier associated with the memory.
+            fact: Human-readable fact or preference to remember.
+            category: Memory category (e.g. ``owner``, ``location``, ``preference``, ``general``).
+            tags: Optional sequence of searchable string tags.
+            source: Origin of the memory (e.g. ``voice``, ``agent``, ``vision``).
+
+        Returns:
+            Stored episodic memory dictionary.
+        """
+        clean_fact = str(fact or "").strip()
+        if not clean_fact:
+            raise ValueError("Episodic memory fact cannot be empty.")
+        clean_robot = str(robot_id or "default").strip() or "default"
+        clean_cat = str(category or "general").strip()[:64] or "general"
+        clean_source = str(source or "voice").strip()[:64] or "voice"
+        clean_tags = [str(t).strip()[:48] for t in (tags or []) if str(t).strip()][:20]
+        now = datetime.now(timezone.utc).isoformat()
+        mem_id = f"mem-{uuid.uuid4().hex[:10]}"
+        record = {
+            "id": mem_id,
+            "robot_id": clean_robot,
+            "fact": clean_fact,
+            "category": clean_cat,
+            "tags": clean_tags,
+            "source": clean_source,
+            "created_at": now,
+        }
+        self._episodic_memories[mem_id] = record
+        return {**record, "tags": list(record["tags"])}
+
+    def search_episodic_memories(
+        self,
+        query: Optional[str] = None,
+        robot_id: Optional[str] = None,
+        limit: int = 8,
+    ) -> List[Dict[str, Any]]:
+        """Search in-memory episodic memories by keyword, tag, or category.
+
+        Args:
+            query: Optional search query string; returns newest memories when omitted.
+            robot_id: Optional robot filter.
+            limit: Maximum records to return.
+
+        Returns:
+            Matching episodic memory dictionaries ordered by relevance and recency.
+        """
+        cap = max(1, min(200, int(limit)))
+        items = list(self._episodic_memories.values())
+        if robot_id:
+            items = [m for m in items if m["robot_id"] == robot_id]
+        items.sort(key=lambda m: m.get("created_at", ""), reverse=True)
+
+        q = str(query or "").strip().lower()
+        if not q:
+            return [{**m, "tags": list(m.get("tags") or [])} for m in items[:cap]]
+
+        tokens = [tok for tok in re.split(r"[\s,;:.!?]+", q) if len(tok) >= 2]
+        scored: List[Tuple[int, str, Dict[str, Any]]] = []
+        for m in items:
+            haystack = " ".join(
+                [
+                    str(m.get("fact") or ""),
+                    str(m.get("category") or ""),
+                    str(m.get("source") or ""),
+                    " ".join(str(t) for t in (m.get("tags") or [])),
+                ]
+            ).lower()
+            score = 0
+            if q in haystack:
+                score += 10
+            for tok in tokens:
+                if tok in haystack:
+                    score += 2
+            if score > 0:
+                scored.append((score, str(m.get("created_at") or ""), m))
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return [{**m, "tags": list(m.get("tags") or [])} for _, _, m in scored[:cap]]
+
+    def list_episodic_memories(
+        self,
+        robot_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """List in-memory episodic memories ordered newest first."""
+        cap = max(1, min(500, int(limit)))
+        items = list(self._episodic_memories.values())
+        if robot_id:
+            items = [m for m in items if m["robot_id"] == robot_id]
+        items.sort(key=lambda m: m.get("created_at", ""), reverse=True)
+        return [{**m, "tags": list(m.get("tags") or [])} for m in items[:cap]]
+
+    def delete_episodic_memory(self, memory_id: str) -> bool:
+        """Delete an in-memory episodic memory record by ID."""
+        return self._episodic_memories.pop(memory_id, None) is not None
+
 
 class PostgresRobotAiStore:
     """Pooled PostgreSQL 18 + pgvector store for People/Faces, Patrol Routes, and Voice Logs."""
@@ -1576,6 +1718,17 @@ class PostgresRobotAiStore:
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
         CREATE INDEX IF NOT EXISTS idx_early_bird_spot ON early_bird_signups(spot_number ASC);
+
+        CREATE TABLE IF NOT EXISTS agent_episodic_memories (
+            id TEXT PRIMARY KEY,
+            robot_id TEXT NOT NULL,
+            fact TEXT NOT NULL,
+            category TEXT NOT NULL DEFAULT 'general',
+            tags_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+            source TEXT NOT NULL DEFAULT 'voice',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_episodic_memories_robot ON agent_episodic_memories(robot_id, created_at DESC);
         """
 
         def _init() -> None:
@@ -3328,5 +3481,156 @@ class PostgresRobotAiStore:
 
         return self._with_retry(_op)
 
+    # --- Episodic Long-Term Agent Memories (PostgreSQL) ---
 
+    @staticmethod
+    def _serialize_episodic_memory(row: Dict[str, Any]) -> Dict[str, Any]:
+        tags_raw = row.get("tags_json")
+        tags = list(tags_raw) if isinstance(tags_raw, list) else []
+        created = row.get("created_at")
+        return {
+            "id": str(row["id"]),
+            "robot_id": str(row["robot_id"]),
+            "fact": str(row["fact"]),
+            "category": str(row.get("category") or "general"),
+            "tags": [str(t) for t in tags],
+            "source": str(row.get("source") or "voice"),
+            "created_at": created.isoformat() if hasattr(created, "isoformat") else str(created or ""),
+        }
 
+    def store_episodic_memory(
+        self,
+        robot_id: str,
+        fact: str,
+        category: str = "general",
+        tags: Optional[Sequence[str]] = None,
+        source: str = "voice",
+    ) -> Dict[str, Any]:
+        """Persist a long-term episodic memory fact in PostgreSQL.
+
+        Args:
+            robot_id: Robot identifier associated with the memory.
+            fact: Human-readable fact or preference to remember.
+            category: Memory category (e.g. ``owner``, ``location``, ``preference``, ``general``).
+            tags: Optional sequence of searchable string tags.
+            source: Origin of the memory (e.g. ``voice``, ``agent``, ``vision``).
+
+        Returns:
+            Stored episodic memory dictionary.
+        """
+        clean_fact = str(fact or "").strip()
+        if not clean_fact:
+            raise ValueError("Episodic memory fact cannot be empty.")
+        clean_robot = str(robot_id or "default").strip() or "default"
+        clean_cat = str(category or "general").strip()[:64] or "general"
+        clean_source = str(source or "voice").strip()[:64] or "voice"
+        clean_tags = [str(t).strip()[:48] for t in (tags or []) if str(t).strip()][:20]
+        mem_id = f"mem-{uuid.uuid4().hex[:10]}"
+
+        def _op() -> Dict[str, Any]:
+            with self._ensure_pool().connection() as conn:
+                row = conn.execute(
+                    """
+                    INSERT INTO agent_episodic_memories (id, robot_id, fact, category, tags_json, source)
+                    VALUES (%s, %s, %s, %s, %s::jsonb, %s)
+                    RETURNING id, robot_id, fact, category, tags_json, source, created_at
+                    """,
+                    (mem_id, clean_robot, clean_fact, clean_cat, json.dumps(clean_tags), clean_source),
+                ).fetchone()
+                conn.commit()
+                return self._serialize_episodic_memory(row)
+
+        return self._with_retry(_op)
+
+    def search_episodic_memories(
+        self,
+        query: Optional[str] = None,
+        robot_id: Optional[str] = None,
+        limit: int = 8,
+    ) -> List[Dict[str, Any]]:
+        """Search PostgreSQL episodic memories by keyword, tag, or category."""
+        cap = max(1, min(200, int(limit)))
+        q = str(query or "").strip()
+
+        def _op() -> List[Dict[str, Any]]:
+            with self._ensure_pool().connection() as conn:
+                clauses: List[str] = []
+                params: List[Any] = []
+                if robot_id:
+                    clauses.append("robot_id = %s")
+                    params.append(robot_id)
+                if q:
+                    tokens = [tok for tok in re.split(r"[\s,;:.!?]+", q) if len(tok) >= 2]
+                    token_clauses: List[str] = []
+                    like_full = f"%{q}%"
+                    token_clauses.append(
+                        "(fact ILIKE %s OR category ILIKE %s OR source ILIKE %s OR tags_json::text ILIKE %s)"
+                    )
+                    params.extend([like_full, like_full, like_full, like_full])
+                    for tok in tokens[:6]:
+                        like_tok = f"%{tok}%"
+                        token_clauses.append(
+                            "(fact ILIKE %s OR category ILIKE %s OR tags_json::text ILIKE %s)"
+                        )
+                        params.extend([like_tok, like_tok, like_tok])
+                    clauses.append(f"({' OR '.join(token_clauses)})")
+                where_sql = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+                params.append(cap)
+                rows = conn.execute(
+                    f"""
+                    SELECT id, robot_id, fact, category, tags_json, source, created_at
+                    FROM agent_episodic_memories
+                    {where_sql}
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                ).fetchall()
+                return [self._serialize_episodic_memory(r) for r in rows]
+
+        return self._with_retry(_op)
+
+    def list_episodic_memories(
+        self,
+        robot_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """List PostgreSQL episodic memories ordered newest first."""
+        cap = max(1, min(500, int(limit)))
+
+        def _op() -> List[Dict[str, Any]]:
+            with self._ensure_pool().connection() as conn:
+                if robot_id:
+                    rows = conn.execute(
+                        """
+                        SELECT id, robot_id, fact, category, tags_json, source, created_at
+                        FROM agent_episodic_memories
+                        WHERE robot_id = %s
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (robot_id, cap),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """
+                        SELECT id, robot_id, fact, category, tags_json, source, created_at
+                        FROM agent_episodic_memories
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (cap,),
+                    ).fetchall()
+                return [self._serialize_episodic_memory(r) for r in rows]
+
+        return self._with_retry(_op)
+
+    def delete_episodic_memory(self, memory_id: str) -> bool:
+        """Delete a PostgreSQL episodic memory record by ID."""
+        def _op() -> bool:
+            with self._ensure_pool().connection() as conn:
+                cur = conn.execute("DELETE FROM agent_episodic_memories WHERE id = %s", (memory_id,))
+                conn.commit()
+                return (cur.rowcount or 0) > 0
+
+        return self._with_retry(_op)

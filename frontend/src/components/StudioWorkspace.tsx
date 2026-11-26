@@ -51,6 +51,7 @@ import {
   updateLidarMode,
   updateLidarSettings,
 } from "@/lib/api";
+import { getOverwatchStatus, type OverwatchStatus } from "@/lib/overwatchApi";
 import type {
   FocusTarget,
   ObjectCluster,
@@ -161,6 +162,7 @@ export function StudioWorkspace() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [updatingLidarSettings, setUpdatingLidarSettings] = useState(false);
   const [updatingOrientation, setUpdatingOrientation] = useState(false);
+  const [overwatchStatus, setOverwatchStatus] = useState<OverwatchStatus | null>(null);
 
   // 3D Real-Room Fusion state (Stages 1 & 2 + 5-Pass Composite Enhancement)
   const [viewportTab, setViewportTab] = useState<string>("lidar2d");
@@ -205,6 +207,23 @@ export function StudioWorkspace() {
     setHiddenPanelIds([]);
     void loadSpaceScenePanels(space.id);
   }, [space?.id, loadSpaceScenePanels]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const pollOverwatch = () => {
+      getOverwatchStatus()
+        .then((st) => {
+          if (!cancelled) setOverwatchStatus(st);
+        })
+        .catch(() => {});
+    };
+    pollOverwatch();
+    const timer = setInterval(pollOverwatch, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
 
   const handleCaptureWall = async () => {
     if (!space?.id || capturingWall || capturing360) return;
@@ -777,6 +796,7 @@ export function StudioWorkspace() {
                 selectedEquipmentId={selectedEquipmentId}
                 pendingPin={pendingPin}
                 focusTarget={focusTarget}
+                overwatchStatus={overwatchStatus}
                 onSelectEquipment={setSelectedEquipmentId}
                 onMapClick={handleMapClick}
               />

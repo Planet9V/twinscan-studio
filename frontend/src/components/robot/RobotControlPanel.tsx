@@ -39,6 +39,7 @@ import {
 import { AiVisionStudioPanel } from "@/components/robot/AiVisionStudioPanel";
 import { PatrolPlannerPanel } from "@/components/robot/PatrolPlannerPanel";
 import { VoiceControlPanel } from "@/components/robot/VoiceControlPanel";
+import { OverwatchHudCard } from "@/components/vision/OverwatchHudCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -1291,6 +1292,9 @@ export function RobotControlPanel({
               </div>
             </InteractiveSurface>
           )}
+
+          {/* Collapsible HD Overwatch Room Cam (4K/1080p + MacBook Cam Dual View & Triangulation) */}
+          <OverwatchHudCard compact defaultVisible={false} />
 
           {/* 2-COLUMN COCKPIT: STICKY DRIVE DECK (LEFT 5) + 3-TAB CONTROL DECK (RIGHT 7) */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">

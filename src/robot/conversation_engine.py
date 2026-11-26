@@ -814,7 +814,80 @@ def detect_offline_tool_intent(user_text: str) -> Optional[Tuple[str, Dict[str, 
     ) or re.search(r"\brth\b", low):
         return ("return_to_home", {})
 
-    # 3. Autonomous frontier room exploration
+    # 3. Live web search
+    m_web = re.search(
+        r"(?:search\s+(?:the\s+)?web\s+(?:for\s+)?|web\s+search\s+(?:for\s+)?|"
+        r"search\s+online\s+(?:for\s+)?|look\s+up\s+(.+?)\s+online|google\s+)(.+)?",
+        low,
+    )
+    if m_web:
+        q = (m_web.group(1) or m_web.group(2) or "").strip(" .?!,")
+        if q:
+            return ("search_web_live", {"query": q})
+
+    # 4. Persistent episodic memory store ("remember that ...", "don't forget ...", "save fact ...")
+    m_save_fact = re.search(
+        r"(?:remember\s+that|don'?t\s+forget(?:\s+that)?|save\s+(?:this\s+)?fact(?:\s+that)?|memorize\s+that)\s+(.+)",
+        raw,
+        re.IGNORECASE,
+    )
+    if m_save_fact:
+        fact_txt = m_save_fact.group(1).strip(" .?!,")
+        if fact_txt:
+            return ("remember_fact", {"fact": fact_txt})
+
+    # 5. Persistent episodic memory recall ("what do you remember about ...", "recall facts ...")
+    m_recall_facts = re.search(
+        r"(?:what\s+do\s+you\s+remember(?:\s+about)?|recall\s+(?:my\s+)?facts?(?:\s+about)?|"
+        r"what\s+facts\s+do\s+you\s+know(?:\s+about)?|list\s+(?:your\s+)?memories)\s*(.*)",
+        low,
+    )
+    if m_recall_facts:
+        q = m_recall_facts.group(1).strip(" .?!,")
+        return ("recall_facts", {"query": q})
+
+    # 6. Controlled closed-loop walk distance ("walk forward 0.5m", "move back 30 cm")
+    m_walk = re.search(
+        r"\b(?:walk|move|step|go)\s+(forward|ahead|back|backward|backwards)\b(?:\s+(?:by\s+)?(\d+(?:\.\d+)?)\s*(meters?|m|centimeters?|cm|feet|foot|ft|steps?)?)?",
+        low,
+    )
+    if m_walk:
+        direction = m_walk.group(1)
+        val_str = m_walk.group(2)
+        unit = (m_walk.group(3) or "m").lower()
+        dist_m = float(val_str) if val_str else 0.3
+        if unit.startswith(("cm", "centimeter")):
+            dist_m /= 100.0
+        elif unit.startswith(("ft", "foot", "feet")):
+            dist_m *= 0.3048
+        elif unit.startswith("step"):
+            dist_m *= 0.2
+        if direction.startswith("back"):
+            dist_m = -abs(dist_m)
+        return ("walk_distance", {"meters": round(dist_m, 3)})
+
+    # 7. Controlled in-place turn angle ("turn left 90 degrees", "rotate right 45", "turn around")
+    if "turn around" in low or "spin around" in low:
+        return ("turn_angle", {"degrees": 180.0})
+    m_turn = re.search(
+        r"\b(?:turn|rotate|spin)\s+(left|right)\b(?:\s+(?:by\s+)?(\d+(?:\.\d+)?)\s*(?:degrees?|deg|°)?)?",
+        low,
+    )
+    if m_turn:
+        side = m_turn.group(1)
+        deg = float(m_turn.group(2)) if m_turn.group(2) else 45.0
+        if side == "right":
+            deg = -abs(deg)
+        return ("turn_angle", {"degrees": round(deg, 1)})
+
+    # 8. HD Overwatch external room camera view
+    if any(
+        phrase in low
+        for phrase in ("overwatch", "room camera", "overhead camera", "4k camera", "4k webcam", "third person view")
+    ):
+        return ("get_overwatch_view", {"include_detections": True})
+
+    # 9. Autonomous frontier room exploration
     if any(
         phrase in low
         for phrase in ("explore", "map the room", "map this room", "discover dark zones", "autonomous scan")
@@ -823,14 +896,14 @@ def detect_offline_tool_intent(user_text: str) -> Optional[Tuple[str, Dict[str, 
         ctx_str = m_ctx.group(1).strip(" .!?") if m_ctx else "room"
         return ("start_autonomous_explore", {"space_context": ctx_str})
 
-    # 4. Zero-movement 3D wall scan
+    # 10. Zero-movement 3D wall scan
     if any(
         phrase in low
         for phrase in ("scan this wall", "scan the wall", "3d scan", "3d wall", "capture 3d", "reconstruct wall")
     ):
         return ("scan_room_wall_3d", {})
 
-    # 5. Spatial memory recall
+    # 11. Spatial memory recall
     mem_match = re.search(
         r"(?:where (?:did you see|is|are|'s)\s+(?:my\s+|the\s+|a\s+)?|"
         r"(?:do you )?remember(?: seeing)?\s+(?:my\s+|the\s+|a\s+)?|"
@@ -843,7 +916,7 @@ def detect_offline_tool_intent(user_text: str) -> Optional[Tuple[str, Dict[str, 
         query = re.sub(r"\b(earlier|today|last|please|recently|around here)\b", "", query).strip()
         return ("recall_spatial_memory", {"query": query})
 
-    # 6. Live telemetry / battery / LiDAR status
+    # 12. Live telemetry / battery / LiDAR status
     if any(
         phrase in low
         for phrase in ("battery", "charge", "status", "lidar", "voltage", "how much power", "telemetry", "health check")
@@ -1222,12 +1295,33 @@ class RobotConversationManager:
         speak_fn: Optional[Callable[[str, Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_executor: Optional[Callable[[str, Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]]] = None,
+        on_mood_fn: Optional[Callable[[str, bool], Coroutine[Any, Any, Any]]] = None,
     ) -> Dict[str, Any]:
-        """Run one complete conversational turn: memory -> optional vision -> LLM/tools -> body action -> Piper TTS -> DB log."""
+        """Run one complete conversational turn: memory -> thinking cue -> vision -> LLM/tools -> mood/action -> TTS -> DB log."""
+        from src.robot.mood_sync import infer_reply_mood
+
         t0 = time.perf_counter()
         clean_msg = str(user_text or "").strip()
         if not clean_msg:
             raise ValueError("Conversation message must not be empty")
+
+        def _fire_mood_cue(mood_key: str, allow_gesture: bool = False) -> None:
+            if on_mood_fn is None:
+                return
+
+            async def _runner() -> None:
+                try:
+                    await on_mood_fn(mood_key, allow_gesture)
+                except Exception as exc:
+                    sys.stderr.write(f"[conversation.mood] Non-blocking mood cue '{mood_key}' failed: {exc}\n")
+
+            try:
+                asyncio.create_task(_runner())
+            except RuntimeError:
+                pass
+
+        # Expressive thinking cue right as utterance arrives (non-blocking)
+        _fire_mood_cue("thinking", False)
 
         history = ai_store.list_conversation_turns(robot_id, limit=12)
         user_turn = ai_store.record_conversation_turn(
@@ -1278,6 +1372,9 @@ class RobotConversationManager:
         allow_act = execute_actions and bool(config.get("allow_body_actions", True)) and bool(
             personality.get("allow_body_actions", True)
         )
+        reply_mood = infer_reply_mood(reply, personality_id=str(personality.get("id") or "dog"))
+        _fire_mood_cue(reply_mood, bool(allow_act and not action_name))
+
         if allow_act and (action_name or rgb_val) and execute_action_fn is not None:
             try:
                 action_taken = await execute_action_fn(action_name, rgb_val)
@@ -1339,6 +1436,7 @@ class RobotConversationManager:
             "latency_ms": latency_ms,
             "source": str(llm_res.get("source") or "offline_fallback"),
             "tool_calls": tool_calls,
+            "mood": reply_mood,
         }
 
     async def start(

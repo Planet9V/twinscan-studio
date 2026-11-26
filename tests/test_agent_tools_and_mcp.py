@@ -94,16 +94,16 @@ def test_ten_tool_schemas_and_agent_endpoints(
     rt.robot_pose["battery_v"] = 7.82
 
     # 1. Schema helpers & GET /api/agent/tools
-    assert len(ROBOT_TOOL_SPECS) == 10
-    assert len(get_openrouter_tool_schemas(exclude=("chat_as_ox", "speak_aloud"))) == 8
-    assert len(get_mcp_tool_schemas()) == 10
+    assert len(ROBOT_TOOL_SPECS) == 16
+    assert len(get_openrouter_tool_schemas(exclude=("chat_as_ox", "speak_aloud"))) == 14
+    assert len(get_mcp_tool_schemas()) == 16
 
     r_tools = client.get("/api/agent/tools")
     assert r_tools.status_code == 200
     t_body = r_tools.json()
-    assert t_body["count"] == 10
-    assert len(t_body["openrouter_tools"]) == 10
-    assert len(t_body["mcp_tools"]) == 10
+    assert t_body["count"] == 16
+    assert len(t_body["openrouter_tools"]) == 16
+    assert len(t_body["mcp_tools"]) == 16
 
     # 2. Execute get_robot_status
     r_st = client.post("/api/agent/execute", json={"tool": "get_robot_status", "arguments": {}, "robot_id": robot_id})
@@ -142,7 +142,7 @@ def test_ten_tool_schemas_and_agent_endpoints(
     r_bundle = client.get("/api/agent/openclaw-bundle", params={"robot_id": robot_id})
     assert r_bundle.status_code == 200
     bundle = r_bundle.json()
-    assert bundle["tool_count"] == 10
+    assert bundle["tool_count"] == 16
     assert bundle["robot_id"] == robot_id
     assert bundle["skill_path"] == "openclaw/skills/puppypi-twinscan/SKILL.md"
     assert "eigenia-puppypi" in bundle["mcp_config"]["mcpServers"]
@@ -192,7 +192,7 @@ async def test_mcp_bridge_jsonrpc_lifecycle_and_tool_forwarding(
         )
         assert list_resp is not None
         tools = list_resp["result"]["tools"]
-        assert len(tools) == 10
+        assert len(tools) == 16
         assert any(t["name"] == "get_robot_status" for t in tools)
 
         # 5. tools/call -> forwards to POST /api/agent/execute

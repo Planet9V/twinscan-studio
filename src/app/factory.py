@@ -17,6 +17,7 @@ from src.api.routes_ai_vision import router as ai_vision_router
 from src.api.routes_devices import router as devices_router
 from src.api.routes_enrichment import router as enrichment_router
 from src.api.routes_lidar import router as lidar_router
+from src.api.routes_overwatch import router as overwatch_router
 from src.api.routes_robots import router as robots_router
 from src.api.routes_twin import router as twin_router
 from src.api.routes_vision import router as vision_router
@@ -37,6 +38,7 @@ from src.robot.patrol_engine import RobotPatrolManager
 from src.robot.ros_profiles import normalize_ros_mode
 from src.robot.sentry_manager import RobotSentryManager
 from src.robot.voice_manager import WonderEchoWakeManager
+from src.vision.overwatch_triangulator import OverwatchCameraManager
 from src.vision.robot_ai_vision import RobotAiVisionEngine, ensure_onnx_models
 
 
@@ -136,6 +138,7 @@ def create_app(
 
     models_dir = os.environ.get("TWINSCAN_MODELS_DIR", "./data/models")
     ai_vision_engine = RobotAiVisionEngine(ai_store=active_ai_store, models_dir=models_dir)
+    overwatch_manager = OverwatchCameraManager()
     patrol_manager = RobotPatrolManager()
     explorer_manager = AutonomousExplorerManager()
     wake_manager = WonderEchoWakeManager()
@@ -205,6 +208,7 @@ def create_app(
     app.state.robot_store = active_robot_store
     app.state.robot_ai_store = active_ai_store
     app.state.ai_vision_engine = ai_vision_engine
+    app.state.overwatch_manager = overwatch_manager
     app.state.patrol_manager = patrol_manager
     app.state.explorer_manager = explorer_manager
     app.state.wake_manager = wake_manager
@@ -230,6 +234,7 @@ def create_app(
     app.include_router(devices_router)
     app.include_router(wiki_router)
     app.include_router(agent_router)
+    app.include_router(overwatch_router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, Any]:

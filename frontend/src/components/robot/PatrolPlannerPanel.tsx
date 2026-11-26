@@ -31,6 +31,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { WorkspaceHeader } from "@/components/ui/WorkspaceHeader";
 import { AutonomousExplorerPanel } from "@/components/robot/AutonomousExplorerPanel";
+import { OverwatchHudCard } from "@/components/vision/OverwatchHudCard";
 import { useStudio } from "@/context/StudioContext";
 import {
   deletePatrolRoute,
@@ -887,6 +888,9 @@ export function PatrolPlannerPanel({ robot }: PatrolPlannerPanelProps) {
               </CardContent>
             )}
           </Card>
+
+          {/* Collapsible HD Overwatch Room Cam (4K/1080p) */}
+          <OverwatchHudCard compact defaultVisible={false} />
 
           <Card>
             <CardHeader>

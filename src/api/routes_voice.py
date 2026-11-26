@@ -17,6 +17,7 @@ from src.robot.conversation_engine import (
     run_voice_diagnostics,
     transcribe_wav_offline,
 )
+from src.robot.mood_sync import apply_robot_mood_expression
 from src.robot.patrol_engine import RobotPatrolManager
 from src.robot.ros_profiles import get_ros_profile, normalize_ros_mode
 from src.robot.rosbridge_proxy import (
@@ -36,6 +37,7 @@ from src.robot.voice_manager import (
     play_speaker_chime,
     record_mic_on_robot,
     set_audio_mixer,
+    speak_sentences_streaming,
     speak_text_on_robot,
 )
 from src.vision.robot_ai_vision import RobotAiVisionEngine, deep_identify_frame
@@ -363,7 +365,7 @@ def _build_conversation_callbacks(request: Request, robot: Dict[str, Any], ssh_p
         return taken
 
     async def _speak(reply_text: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
-        return await speak_text_on_robot(
+        return await speak_sentences_streaming(
             ip=ip,
             user=robot["ssh_user"],
             password=ssh_pw,
@@ -374,7 +376,17 @@ def _build_conversation_callbacks(request: Request, robot: Dict[str, Any], ssh_p
             anti_clip=bool(cfg.get("anti_clip", True)),
         )
 
-    return _fetch_camera, _execute_action, _speak
+    async def _on_mood(mood: str, allow_gesture: bool) -> Dict[str, Any]:
+        return await apply_robot_mood_expression(
+            ip=ip,
+            rosbridge_port=port,
+            ros_version=ros_mode,
+            mood=mood,
+            allow_gesture=allow_gesture,
+            robot_id=robot_id,
+        )
+
+    return _fetch_camera, _execute_action, _speak, _on_mood
 
 
 # --- Conversational Assistant Config, Personalities & Multi-Turn Chat Endpoints ---
@@ -503,7 +515,7 @@ async def robot_voice_chat(
     conv_mgr = _conversation_manager(request)
 
     cfg, pers = _resolve_config_and_personality(ai_store, robot_id)
-    fetch_cam, exec_act, speak_fn = _build_conversation_callbacks(request, robot, ssh_pw)
+    fetch_cam, exec_act, speak_fn, on_mood_fn = _build_conversation_callbacks(request, robot, ssh_pw)
     voice_tools, tool_exec = _build_voice_tool_bridge(request, robot_id)
     batt_mv = robot.get("battery_mv")
     live_ctx = {
@@ -531,6 +543,7 @@ async def robot_voice_chat(
             speak_fn=speak_fn,
             tools=voice_tools if body.execute_actions else None,
             tool_executor=tool_exec if body.execute_actions else None,
+            on_mood_fn=on_mood_fn if body.execute_actions else None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -545,7 +558,7 @@ async def start_robot_conversation(robot_id: str, request: Request) -> Dict[str,
     ai_store = _ai_store(request)
     rt = _runtime(request)
     conv_mgr = _conversation_manager(request)
-    fetch_cam, exec_act, speak_fn = _build_conversation_callbacks(request, robot, ssh_pw)
+    fetch_cam, exec_act, speak_fn, on_mood_fn = _build_conversation_callbacks(request, robot, ssh_pw)
     voice_tools, tool_exec = _build_voice_tool_bridge(request, robot_id)
 
     async def _run_turn(utterance: str) -> Dict[str, Any]:
@@ -575,6 +588,7 @@ async def start_robot_conversation(robot_id: str, request: Request) -> Dict[str,
             speak_fn=speak_fn,
             tools=voice_tools,
             tool_executor=tool_exec,
+            on_mood_fn=on_mood_fn,
         )
 
     return await conv_mgr.start(

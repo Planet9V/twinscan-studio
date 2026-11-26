@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import io
 import math
 import os
@@ -1065,6 +1066,88 @@ print(json.dumps({"ok": True, "written": len(chunk)}))
 # Keep each SSH argv payload well below Linux's 128 KiB MAX_ARG_STRLEN limit.
 _MAX_INLINE_B64_CHARS = 32_000
 
+_SPEECH_ABBREV_RE = re.compile(
+    r"\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|e\.g|i\.e|Fig|No|Vol)\.$",
+    re.IGNORECASE,
+)
+
+
+def split_into_speech_sentences(text: str) -> List[str]:
+    """Split spoken reply text cleanly into sentence chunks for pipelined streaming TTS.
+
+    Preserves decimal numbers (e.g. ``7.82 V``, ``0.38 m``) and common abbreviations
+    (e.g. ``Dr.``, ``e.g.``) while splitting on natural ``.``, ``!``, and ``?`` boundaries
+    so Piper TTS can synthesize sentence ``N+1`` while WonderEcho plays sentence ``N``.
+
+    Args:
+        text: Plain spoken text string.
+
+    Returns:
+        Ordered list of trimmed, non-empty speech sentences.
+    """
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not cleaned:
+        return []
+
+    raw_parts: List[str] = []
+    start = 0
+    n = len(cleaned)
+    for idx, ch in enumerate(cleaned):
+        if ch not in ".!?":
+            continue
+        # Preserve decimal numbers like 7.82 or 0.38
+        if ch == "." and idx > 0 and idx + 1 < n and cleaned[idx - 1].isdigit() and cleaned[idx + 1].isdigit():
+            continue
+        # Only split at end-of-string or before whitespace / closing quote + whitespace
+        nxt = idx + 1
+        while nxt < n and cleaned[nxt] in "\"')]}":
+            nxt += 1
+        if nxt < n and not cleaned[nxt].isspace():
+            continue
+        candidate = cleaned[start:nxt].strip()
+        if ch == "." and _SPEECH_ABBREV_RE.search(candidate):
+            continue
+        if candidate:
+            raw_parts.append(candidate)
+        start = nxt
+
+    tail = cleaned[start:].strip()
+    if tail:
+        raw_parts.append(tail)
+
+    merged: List[str] = []
+    for part in raw_parts:
+        if merged and len(part) < 8:
+            merged[-1] = f"{merged[-1]} {part}".strip()
+        else:
+            merged.append(part)
+    return merged
+
+
+def _ssh_control_args(ip: str, user: str) -> List[str]:
+    """Build OpenSSH ControlMaster multiplexing arguments for warm audio SSH reuse.
+
+    Uses a compact hashed socket path under ``/tmp`` so macOS/Linux ``sun_path`` limits
+    (104 bytes) are never exceeded while avoiding repeated 400 ms TLS/SSH handshakes.
+
+    Args:
+        ip: Remote robot IPv4/hostname.
+        user: Remote SSH username.
+
+    Returns:
+        List of OpenSSH CLI ``-o`` flags enabling ``ControlMaster=auto`` with ``120s`` persist.
+    """
+    digest = hashlib.sha256(f"{user}@{ip}".encode("utf-8")).hexdigest()[:12]
+    sock_path = f"/tmp/eigenia_ssh_{digest}.sock"
+    return [
+        "-o",
+        "ControlMaster=auto",
+        "-o",
+        "ControlPersist=120",
+        "-o",
+        f"ControlPath={sock_path}",
+    ]
+
 
 async def play_wav_on_robot(
     ip: str,
@@ -1139,6 +1222,105 @@ async def speak_text_on_robot(
         "voice": actual_voice,
         "anti_clip": bool(anti_clip),
         "bytes_sent": len(wav_bytes),
+    }
+
+
+async def speak_sentences_streaming(
+    ip: str,
+    user: str,
+    password: str,
+    text: str,
+    engine: str = "piper_tts",
+    voice: Optional[str] = None,
+    speed: int = 155,
+    anti_clip: bool = True,
+    card_index: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Stream multi-sentence speech by pipelining TTS synthesis with WonderEcho playback.
+
+    Splits ``text`` via ``split_into_speech_sentences`` and kicks off ``synthesize_speech_wav``
+    for sentence ``N+1`` concurrently while ``play_wav_on_robot`` streams sentence ``N``,
+    cutting perceived time-to-first-audio on multi-sentence responses.
+
+    Args:
+        ip: Robot IPv4 address.
+        user: Robot SSH username.
+        password: Robot SSH password.
+        text: Full spoken reply text.
+        engine: TTS engine (``"piper_tts"``, ``"edge_tts"``, ``"espeak"``, or ``"auto"``).
+        voice: Optional voice identifier.
+        speed: Speech rate in words per minute.
+        anti_clip: Apply WonderEcho Pro 2 W anti-clipping EQ filter.
+        card_index: Optional ALSA USB audio card index override.
+
+    Returns:
+        Dictionary ``{ok, text, sentences_spoken, engine, voice, anti_clip, bytes_sent}``.
+    """
+    sentences = split_into_speech_sentences(text)
+    if not sentences:
+        return {
+            "ok": True,
+            "text": text,
+            "sentences_spoken": 0,
+            "engine": engine,
+            "voice": voice or "",
+            "anti_clip": bool(anti_clip),
+            "bytes_sent": 0,
+        }
+
+    total_bytes = 0
+    actual_engine = engine
+    actual_voice = voice or ""
+    next_task: Optional[asyncio.Task[Tuple[bytes, str, str]]] = asyncio.create_task(
+        synthesize_speech_wav(
+            text=sentences[0],
+            engine=engine,
+            voice=voice,
+            speed=speed,
+            anti_clip=anti_clip,
+        )
+    )
+    try:
+        for idx in range(len(sentences)):
+            assert next_task is not None
+            wav_bytes, actual_engine, actual_voice = await next_task
+            next_task = None
+            if idx + 1 < len(sentences):
+                next_task = asyncio.create_task(
+                    synthesize_speech_wav(
+                        text=sentences[idx + 1],
+                        engine=engine,
+                        voice=voice,
+                        speed=speed,
+                        anti_clip=anti_clip,
+                    )
+                )
+            await play_wav_on_robot(
+                ip=ip,
+                user=user,
+                password=password,
+                wav_bytes=wav_bytes,
+                card_index=card_index,
+            )
+            total_bytes += len(wav_bytes)
+    except Exception as exc:
+        if next_task is not None and not next_task.done():
+            next_task.cancel()
+            try:
+                await next_task
+            except BaseException:
+                pass
+        sys.stderr.write(f"[voice.stream_tts] Streaming playback error on {ip}: {exc}\n")
+        raise
+
+    return {
+        "ok": True,
+        "text": text,
+        "sentences_spoken": len(sentences),
+        "engine": actual_engine,
+        "voice": actual_voice,
+        "anti_clip": bool(anti_clip),
+        "bytes_sent": total_bytes,
     }
 
 

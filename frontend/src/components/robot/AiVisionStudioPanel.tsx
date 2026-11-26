@@ -39,6 +39,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { WorkspaceHeader } from "@/components/ui/WorkspaceHeader";
+import { OverwatchHudCard } from "@/components/vision/OverwatchHudCard";
 import { SpatialMemoryGallery } from "@/components/vision/SpatialMemoryGallery";
 import { useStudio } from "@/context/StudioContext";
 import { getFileUrl } from "@/lib/api";
@@ -913,6 +914,9 @@ export function AiVisionStudioPanel({ robot, activeRosMode }: AiVisionStudioPane
               </div>
             </CardHeader>
           </Card>
+
+          {/* Collapsible HD Overwatch Room Cam (4K/1080p) */}
+          <OverwatchHudCard compact defaultVisible={false} />
 
           {/* Main Split: Interactive Annotated MJPEG Video + Safety & VLM Controls */}
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">

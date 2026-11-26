@@ -294,6 +294,12 @@ const FALLBACK_AGENT_TOOLS: AgentToolSchema[] = [
   { name: "scan_room_wall_3d", description: "Run zero-movement Stage 1 3D wall fusion scan on active TwinScan space" },
   { name: "speak_aloud", description: "Synthesize & speak text on WonderEcho Pro speaker (clamped <= 320 chars)" },
   { name: "chat_as_ox", description: "Delegate a natural conversational turn to the embodied OX assistant" },
+  { name: "search_web_live", description: "Live grounded web search via OpenRouter Perplexity Sonar" },
+  { name: "remember_fact", description: "Persist a personal preference or room fact into PostgreSQL 18 episodic memory" },
+  { name: "recall_facts", description: "Search PostgreSQL 18 episodic memory for saved facts & preferences" },
+  { name: "walk_distance", description: "Controlled forward/backward step (-0.6..+0.8 m) with LD19 >= 0.38 m hard-stop safety" },
+  { name: "turn_angle", description: "Controlled yaw rotation (-180..+180 deg) with guaranteed zero-velocity stop" },
+  { name: "get_overwatch_view", description: "Read live HD 4K/1080p Overwatch Room Cam detections & triangulated (x, y) coordinates" },
 ];
 
 const FALLBACK_MCP_CONFIG = {
@@ -1719,7 +1725,7 @@ export function VoiceControlPanel({ robot }: VoiceControlPanelProps) {
             </div>
           </InteractiveSurface>
 
-          {/* Collapsible OpenClaw & MCP Agent Bridge (10 Tools) */}
+          {/* Collapsible OpenClaw & MCP Agent Bridge (16 Tools) */}
           <InteractiveSurface
             accent="orange"
             title={`OpenClaw & MCP Agent Bridge (${agentTools.length} Tools)`}
@@ -1727,7 +1733,7 @@ export function VoiceControlPanel({ robot }: VoiceControlPanelProps) {
             badge={
               <Badge variant="default" className="font-mono text-[9px]">
                 <Plug className="h-2.5 w-2.5" />
-                STDIO MCP · 10 TOOLS
+                MCP · {agentTools.length} TOOLS
               </Badge>
             }
             collapsible

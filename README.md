@@ -10,7 +10,7 @@
 [![Three.js & Babylon.js](https://img.shields.io/badge/3D%20Engines-Three.js%20%2B%20Babylon.js-38BDF8?style=flat-square)](frontend/src/components/twin3d)
 [![PostgreSQL 18 + pgvector](https://img.shields.io/badge/PostgreSQL-18%20%2B%20pgvector-336791?style=flat-square&logo=postgresql&logoColor=white)](docker-compose.yml)
 [![Neo4j 5](https://img.shields.io/badge/Neo4j-5%20Graph-008CC1?style=flat-square&logo=neo4j&logoColor=white)](src/graph/neo4j_store.py)
-[![Tests](https://img.shields.io/badge/pytest-168%20passing-10B981?style=flat-square)](tests)
+[![Tests](https://img.shields.io/badge/pytest-179%20passing-10B981?style=flat-square)](tests)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)](LICENSE)
 
 [Quick Start](#quick-start-3-commands) · [Live Screenshots](#inside-the-studio) · [Flagship PuppyPi Pro Example](#flagship-example-hiwonder-puppypi-pro) · [Architecture](#system-architecture) · [Full Wiki (`docs/wiki/`)](docs/wiki/README.md) · [Early Bird Founders](#early-bird-maker-founders-50-spots)
@@ -44,7 +44,7 @@ Every capability below was built and tested against a real **Hiwonder PuppyPi Pr
 | **Live LD19 LiDAR Rate** | `5.0–6.9 Hz`, single-instance deduplicated (`0` timeouts) | `src/robot/ssh_manager.py` |
 | **Battery & RTH Telemetry** | Live 2S LiPo voltage (`8.30 V` / `95%`), auto-RTH at `7.10 V` | `src/robot/explorer_engine.py` |
 | **Cloud Dependency** | `0` required cloud accounts for video, voice, or LiDAR | `src/devices/local_camera_bridge.py` |
-| **Automated Verification** | `168` passing `pytest` tests (`0` warnings), `14` Next.js 16 routes | `tests/` + `frontend/` |
+| **Automated Verification** | `179` passing `pytest` tests (`0` warnings), `14` Next.js 16 routes | `tests/` + `frontend/` |
 
 ---
 
@@ -145,12 +145,16 @@ Everything in this repository ships with **Hiwonder PuppyPi Pro** as the end-to-
 
 Press `⌘K` (or `Ctrl+K`) on any page to jump directly to any workspace, room, or tool.
 
-### OpenClaw MCP Bridge & `"Hey OX"` Voice Tool-Calling
+### OpenClaw MCP Bridge, 16-Tool `"Hey OX"` Supercharge & Dual-Camera Overwatch
 
-External agents (OpenClaw, Claude Desktop, or any stdio MCP client) and the in-app `"Hey OX"` voice assistant share a single 10-tool safety-checked registry in `src/agent/robot_tools.py` (`get_robot_status`, `speak_aloud`, `run_body_action`, `capture_camera_snapshot`, `recall_spatial_memory`, `start_autonomous_explore`, `return_to_home`, `stop_robot_estop`, `scan_room_wall_3d`, and `chat_as_ox`).
+External agents (OpenClaw, Claude Desktop, or any stdio/HTTP MCP client) and the in-app `"Hey OX"` voice assistant share a single **16-tool** safety-checked registry in `src/agent/robot_tools.py` (`get_robot_status`, `speak_aloud`, `run_body_action`, `capture_camera_snapshot`, `recall_spatial_memory`, `start_autonomous_explore`, `return_to_home`, `stop_robot_estop`, `scan_room_wall_3d`, `chat_as_ox`, `search_web_live`, `remember_fact`, `recall_facts`, `walk_distance`, `turn_angle`, and `get_overwatch_view`).
 
-- **Stdio MCP Server (`src/agent/mcp_bridge.py`):** Run `.venv/bin/python -m src.agent.mcp_bridge` with `TWINSCAN_API_URL=http://localhost:8000` (zero extra dependencies) or copy the ready-made `openclaw/mcp-config.json` and `openclaw/skills/puppypi-twinscan/SKILL.md` directly from `/voice`.
-- **`"Hey OX"` Live Voice Tool-Calling:** Spoken or typed commands in `/voice` run live robot tools (via OpenRouter function calling with a 3-round safety cap, or offline keyword routing when no API key is set) and speak the result back in character.
+- **Stdio & Streamable HTTP MCP (`src/agent/mcp_bridge.py`, `POST /api/agent/mcp`):** Run `.venv/bin/python -m src.agent.mcp_bridge` with `TWINSCAN_API_URL=http://localhost:8000` (zero extra dependencies) or use the portable Docker OpenClaw profile (`docker compose --profile openclaw up -d`) with `openclaw/mcp-config.json` and `openclaw/skills/puppypi-twinscan/SKILL.md`.
+- **`"Hey OX"` Voice Supercharge (`src/robot/voice_manager.py`, `src/robot/mood_sync.py`):** Sentence-level streaming `piper-tts` over a warm SSH audio pipe, expressive RGB/OLED mood sync, PostgreSQL `agent_episodic_memories`, live web search (`perplexity/sonar` via OpenRouter), and LD19-guarded `walk_distance` / `turn_angle` commands.
+- **4K USB & MacBook Pro Dual-Camera Overwatch (`src/vision/overwatch_triangulator.py`, `src/bridge/mac_camera_bridge.py`):** Stream an external 4K USB webcam and/or MacBook Pro camera into the backend for 1080p YOLO11n/YuNet/AprilTag tracking and dual-ray 3D triangulation with PuppyPi's FPV camera:
+  ```bash
+  .venv/bin/python -m src.bridge.mac_camera_bridge --all-cameras --width 1920 --height 1080
+  ```
 
 ---
 
@@ -270,7 +274,7 @@ Every guide in `docs/wiki/` is traced directly to source files with line-number 
 ## Local Development & Tests
 
 ```bash
-# Backend test suite (168 unit & API integration tests, 0 warnings)
+# Backend test suite (179 unit & API integration tests, 0 warnings)
 .venv/bin/pytest -v
 
 # Frontend TypeScript check & production build (14 static App Router pages)

@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Crosshair, Eye, Maximize2, Ruler, ZoomIn, ZoomOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import type { OverwatchStatus } from "@/lib/overwatchApi";
 import type { EquipmentAsset, FocusTarget, LidarFrame, ObjectCluster, SpatialDarkZone } from "@/lib/types";
 
 interface Lidar2DCanvasProps {
@@ -13,6 +14,7 @@ interface Lidar2DCanvasProps {
   selectedEquipmentId: string | null;
   pendingPin: { x: number; y: number } | null;
   focusTarget: FocusTarget | null;
+  overwatchStatus?: OverwatchStatus | null;
   onSelectEquipment: (id: string) => void;
   onMapClick: (x: number, y: number, cluster?: ObjectCluster) => void;
 }
@@ -24,6 +26,7 @@ export function Lidar2DCanvas({
   selectedEquipmentId,
   pendingPin,
   focusTarget,
+  overwatchStatus = null,
   onSelectEquipment,
   onMapClick,
 }: Lidar2DCanvasProps) {
@@ -393,6 +396,114 @@ export function Lidar2DCanvas({
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
+    // Calibrated HD Overwatch Room Camera icon + FOV cone + triangulated target diamonds
+    if (overwatchStatus?.calibration) {
+      const cal = overwatchStatus.calibration;
+      const ox = toSx(cal.x_m);
+      const oy = toSy(cal.y_m);
+      const owOnline = Boolean(overwatchStatus.online);
+      const owYawRad = ((cal.yaw_deg ?? 0) * Math.PI) / 180;
+      const owHalfFov = (((cal.hfov_deg ?? 78) / 2) * Math.PI) / 180;
+      const owReachPx = (owOnline ? 3.4 : 2.1) * scalePxPerM;
+
+      ctx.save();
+      ctx.translate(ox, oy);
+      ctx.rotate(-Math.PI / 2 - owYawRad);
+
+      // HD Overwatch FOV Cone
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, owReachPx, -owHalfFov, owHalfFov);
+      ctx.closePath();
+      ctx.fillStyle = owOnline ? "rgba(56, 189, 248, 0.13)" : "rgba(56, 189, 248, 0.05)";
+      ctx.fill();
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = owOnline ? "rgba(56, 189, 248, 0.85)" : "rgba(56, 189, 248, 0.35)";
+      ctx.lineWidth = owOnline ? 1.5 : 1;
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Stylized Camera Housing & Lens Cone
+      ctx.fillStyle = owOnline ? "#38bdf8" : "#64748b";
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1.2;
+      ctx.fillRect(-7, -5, 11, 10);
+      ctx.strokeRect(-7, -5, 11, 10);
+      ctx.beginPath();
+      ctx.moveTo(4, -3);
+      ctx.lineTo(11, -6);
+      ctx.lineTo(11, 6);
+      ctx.lineTo(4, 3);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+
+      ctx.font = "bold 9px 'JetBrains Mono', monospace";
+      ctx.fillStyle = owOnline ? "#38bdf8" : "#94a3b8";
+      ctx.fillText(owOnline ? "HD OVERWATCH LIVE" : "HD OVERWATCH", ox + 12, oy + 3);
+
+      // Triangulated Target Diamonds + Sightlines
+      const targets = Array.isArray(overwatchStatus.triangulated_targets)
+        ? overwatchStatus.triangulated_targets
+        : [];
+      for (const tgt of targets) {
+        if (!Number.isFinite(tgt.x) || !Number.isFinite(tgt.y)) continue;
+        const tx = toSx(tgt.x);
+        const ty = toSy(tgt.y);
+
+        // Sightline from Overwatch camera to triangulated target
+        ctx.save();
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = "rgba(56, 189, 248, 0.55)";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(ox, oy);
+        ctx.lineTo(tx, ty);
+        ctx.stroke();
+        ctx.restore();
+
+        // Glowing Diamond Marker
+        const r = 7;
+        ctx.beginPath();
+        ctx.moveTo(tx, ty - r);
+        ctx.lineTo(tx + r, ty);
+        ctx.lineTo(tx, ty + r);
+        ctx.lineTo(tx - r, ty);
+        ctx.closePath();
+        ctx.fillStyle = "rgba(224, 90, 16, 0.35)";
+        ctx.fill();
+        ctx.strokeStyle = "#38bdf8";
+        ctx.lineWidth = 1.8;
+        ctx.stroke();
+
+        ctx.font = "bold 9px 'JetBrains Mono', monospace";
+        ctx.fillStyle = "#7dd3fc";
+        ctx.fillText(
+          `◆ ${tgt.label} (${tgt.x.toFixed(2)}, ${tgt.y.toFixed(2)})`,
+          tx + 10,
+          ty - 3
+        );
+      }
+
+      // Optional PuppyPi Visual Lock Reticle from Overwatch
+      if (
+        overwatchStatus.puppy_visual_pose?.seen &&
+        Number.isFinite(overwatchStatus.puppy_visual_pose.x) &&
+        Number.isFinite(overwatchStatus.puppy_visual_pose.y)
+      ) {
+        const px = toSx(overwatchStatus.puppy_visual_pose.x);
+        const py = toSy(overwatchStatus.puppy_visual_pose.y);
+        ctx.save();
+        ctx.setLineDash([3, 2]);
+        ctx.strokeStyle = "#38bdf8";
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.arc(px, py, 12, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
     // Crisp FRONT / BACK / LEFT / RIGHT edge compass labels (+ live cardinal distances if present)
     const card = frame?.cardinal_m;
     const fmtCard = (val?: number | null) =>
@@ -415,7 +526,7 @@ export function Lidar2DCanvas({
     drawEdgeBadge(`RIGHT →${fmtCard(card?.right)}`, width - 58, height / 2, "#38bdf8");
 
     ctx.restore();
-  }, [frame, equipment, darkZones, selectedEquipmentId, pendingPin, focusTarget, scalePxPerM, pan, colorMode, showDarkZones, rulerPts]);
+  }, [frame, equipment, darkZones, selectedEquipmentId, pendingPin, focusTarget, overwatchStatus, scalePxPerM, pan, colorMode, showDarkZones, rulerPts]);
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const pt = screenToWorld(e.clientX, e.clientY);

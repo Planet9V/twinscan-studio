@@ -1,18 +1,20 @@
-"""Unified 10-Tool Safe Robot Registry for OpenClaw MCP Bridge & 'Hey OX' Voice Tool-Calling.
+"""Unified 16-Tool Safe Robot Registry for OpenClaw MCP Bridge & 'Hey OX' Voice Tool-Calling.
 
 Every tool enforces PuppyPi Pro physical safety boundaries, Patrol <-> Explorer mutual exclusion,
-global E-STOP precedence, and structured ``{ok, tool, robot_id, summary, data, duration_ms}``
-responses without adding any third-party dependencies.
+global E-STOP precedence, LD19 front-clearance gating, and structured
+``{ok, tool, robot_id, summary, data, duration_ms}`` responses without adding any third-party dependencies.
 """
 
 from __future__ import annotations
 
 import asyncio
+import math
 import sys
 import time
 from typing import Any, Dict, List, Optional, Sequence
 
 import cv2
+import httpx
 import numpy as np
 
 from src.lidar.composite_enhancer import resolve_enhance_preset
@@ -25,6 +27,7 @@ from src.robot.rosbridge_proxy import (
     call_go_home,
     fetch_robot_snapshot,
     publish_pose,
+    publish_velocity,
     run_action,
     trigger_estop,
 )
@@ -250,6 +253,128 @@ ROBOT_TOOL_SPECS: List[Dict[str, Any]] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "search_web_live",
+        "description": (
+            "Search the live internet using Perplexity Sonar via OpenRouter to answer real-time questions "
+            "(weather, news, facts, documentation) with concise spoken results."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural-language search query to look up live on the web.",
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "remember_fact",
+        "description": (
+            "Persist a long-term episodic fact or user preference in PuppyPi's memory database "
+            "(e.g. owner's name, charger location, favorite command) so OX recalls it in future sessions."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "fact": {
+                    "type": "string",
+                    "description": "Fact, note, or preference to remember.",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Optional category such as 'owner', 'room', 'preference', or 'general'.",
+                    "default": "general",
+                },
+            },
+            "required": ["fact"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "recall_facts",
+        "description": (
+            "Search and recall persistent long-term episodic facts previously remembered by PuppyPi."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Optional keyword or topic to search across stored episodic memories.",
+                    "default": "",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of remembered facts to return (1..20, default 8).",
+                    "default": 8,
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "walk_distance",
+        "description": (
+            "Safely walk PuppyPi forward or backward a clamped distance (-0.6m..+0.8m) with automatic "
+            "LD19 front-obstacle clearance gating (>= 0.38m) and guaranteed zero-velocity stop."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "meters": {
+                    "type": "number",
+                    "description": "Target distance in meters (positive=forward up to +0.8m, negative=backward down to -0.6m).",
+                },
+                "speed_mps": {
+                    "type": "number",
+                    "description": "Walking speed in meters per second, clamped to 0.05..0.14 (default 0.10).",
+                    "default": 0.10,
+                },
+            },
+            "required": ["meters"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "turn_angle",
+        "description": (
+            "Rotate PuppyPi in place by a clamped angle (-180..+180 degrees; positive=left/CCW, negative=right/CW) "
+            "with guaranteed zero-velocity stop."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "degrees": {
+                    "type": "number",
+                    "description": "Turn angle in degrees clamped to [-180, +180] (positive=left, negative=right).",
+                },
+            },
+            "required": ["degrees"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "get_overwatch_view",
+        "description": (
+            "Read live status, HD resolution, FPS, object detections, and dual-camera triangulated (x, y) "
+            "world coordinates from the external Mac 4K / MacBook HD Overwatch room camera."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "include_detections": {
+                    "type": "boolean",
+                    "description": "Whether to include full detection & triangulated target arrays (default true).",
+                    "default": True,
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
 ]
 
 _TOOL_NAMES = frozenset(spec["name"] for spec in ROBOT_TOOL_SPECS)
@@ -351,7 +476,7 @@ async def execute_robot_tool(
     arguments: Optional[Dict[str, Any]] = None,
     robot_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Execute one of the 10 validated safe robot tools against the active FastAPI application state.
+    """Execute one of the 16 validated safe robot tools against the active FastAPI application state.
 
     Args:
         app: Active FastAPI application exposing ``app.state`` managers and stores.
@@ -464,6 +589,135 @@ async def execute_robot_tool(
         ]
         summary = f"Found {len(sightings)} sighting(s): " + "; ".join(bits) + "."
         return _finish(True, summary, {"sightings": sightings, "count": len(sightings), "query": query})
+
+    # --- 11. search_web_live (works even without live robot) ---
+    if name == "search_web_live":
+        query = str(args.get("query") or "").strip()
+        if not query:
+            raise ValueError("search_web_live requires non-empty 'query'.")
+        api_key = str((rt.effective_config.get("openrouter_api_key", "") if rt else "") or "").strip()
+        base_url = str(
+            (rt.effective_config.get("openrouter_base_url", "https://openrouter.ai/api/v1") if rt else "https://openrouter.ai/api/v1")
+            or "https://openrouter.ai/api/v1"
+        ).rstrip("/")
+        if not api_key:
+            return _finish(
+                False,
+                "OpenRouter API key is not configured for live web search. Add one in Config to enable Perplexity Sonar.",
+                {"query": query, "configured": False},
+            )
+
+        payload = {
+            "model": "perplexity/sonar",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Answer clearly and accurately in 1 to 3 concise spoken sentences with zero markdown.",
+                },
+                {"role": "user", "content": query},
+            ],
+            "max_tokens": 220,
+            "temperature": 0.2,
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://eigenia.twinscan.local",
+            "X-Title": "Eigenia TwinScan Studio",
+        }
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, 4):
+            try:
+                async with httpx.AsyncClient(timeout=20.0) as client:
+                    resp = await client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
+                    resp.raise_for_status()
+                    body = resp.json()
+                choices = body.get("choices") or []
+                answer = str(((choices[0].get("message") or {}).get("content") if choices else "") or "").strip()
+                citations = list(body.get("citations") or [])
+                if not answer:
+                    answer = f"No live search answer returned for '{query}'."
+                return _finish(
+                    True,
+                    answer,
+                    {
+                        "query": query,
+                        "model": "perplexity/sonar",
+                        "answer": answer,
+                        "citations": citations,
+                    },
+                )
+            except Exception as exc:
+                last_exc = exc
+                sys.stderr.write(f"[agent.search_web_live] Attempt {attempt}/3 failed for '{query}': {exc}\n")
+                if attempt < 3:
+                    await asyncio.sleep(0.35 * attempt)
+        return _finish(False, f"Live web search failed after 3 attempts: {last_exc}", {"query": query})
+
+    # --- 12. remember_fact (works even without live robot) ---
+    if name == "remember_fact":
+        fact = str(args.get("fact") or "").strip()
+        if not fact:
+            raise ValueError("remember_fact requires non-empty 'fact'.")
+        category = str(args.get("category") or "general").strip() or "general"
+        if ai_store is None or not hasattr(ai_store, "store_episodic_memory"):
+            return _finish(False, "Episodic memory store is unavailable.", {"fact": fact})
+        mem = ai_store.store_episodic_memory(
+            robot_id=resolved_id or "default",
+            fact=fact,
+            category=category,
+            tags=[],
+            source="agent",
+        )
+        return _finish(
+            True,
+            f"Remembered ({category}): {fact}",
+            {"memory": mem, "fact": fact, "category": category},
+        )
+
+    # --- 13. recall_facts (works even without live robot) ---
+    if name == "recall_facts":
+        if ai_store is None or not hasattr(ai_store, "search_episodic_memories"):
+            return _finish(False, "Episodic memory store is unavailable.", {})
+        query = str(args.get("query") or "").strip()
+        limit = max(1, min(20, int(args.get("limit", 8))))
+        if query:
+            memories = ai_store.search_episodic_memories(query=query, robot_id=None, limit=limit)
+        else:
+            memories = ai_store.list_episodic_memories(robot_id=None, limit=limit)
+        if not memories:
+            q_txt = f" matching '{query}'" if query else ""
+            return _finish(True, f"No remembered facts found{q_txt}.", {"memories": [], "count": 0, "query": query})
+        bits = [f"[{m.get('category', 'general')}] {m.get('fact', '')}" for m in memories[:5]]
+        summary = f"Recalled {len(memories)} fact(s): " + "; ".join(bits) + "."
+        return _finish(True, summary, {"memories": memories, "count": len(memories), "query": query})
+
+    # --- 16. get_overwatch_view (works even without live robot) ---
+    if name == "get_overwatch_view":
+        include_detections = bool(args.get("include_detections", True))
+        overwatch_mgr = getattr(app.state, "overwatch_manager", None)
+        if overwatch_mgr is None:
+            return _finish(False, "HD Overwatch camera manager is not initialized.", {"online": False})
+        status = dict(overwatch_mgr.get_status() or {})
+        online = bool(status.get("online", False))
+        cam_name = str(status.get("camera_name") or "HD Overwatch")
+        width = int(status.get("width") or 0)
+        height = int(status.get("height") or 0)
+        fps = float(status.get("fps") or 0.0)
+        detections = list(status.get("detections") or [])
+        targets = list(status.get("triangulated_targets") or [])
+        if not include_detections:
+            status["detections"] = []
+            status["triangulated_targets"] = []
+        if not online:
+            summary = f"{cam_name} is offline. Start mac_camera_bridge.py on your MacBook to stream HD Overwatch."
+        else:
+            det_txt = f"{len(detections)} detection(s)"
+            if targets:
+                t0_item = targets[0]
+                det_txt += f", primary target at ({float(t0_item.get('x', 0.0)):.2f}m, {float(t0_item.get('y', 0.0)):.2f}m)"
+            summary = f"{cam_name} online at {width}x{height} ({fps:.1f} FPS): {det_txt}."
+        return _finish(True, summary, status)
 
     # Remaining tools require a registered robot
     if not robot or not resolved_id:
@@ -798,5 +1052,185 @@ async def execute_robot_tool(
         )
         reply = str(turn.get("reply") or "")
         return _finish(True, reply, {"reply": reply, "personality_id": pid, "spoken": bool(turn.get("spoken"))})
+
+    # --- 14. walk_distance ---
+    if name == "walk_distance":
+        if "meters" not in args or args.get("meters") is None:
+            raise ValueError("walk_distance requires numeric 'meters'.")
+        try:
+            raw_meters = float(args["meters"])
+            raw_speed = float(args.get("speed_mps", 0.10))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"walk_distance arguments must be numeric: {exc}") from exc
+        if not math.isfinite(raw_meters) or not math.isfinite(raw_speed):
+            raise ValueError("walk_distance arguments must be finite numbers.")
+
+        clamped_m = max(-0.6, min(0.8, raw_meters))
+        speed_mps = max(0.05, min(0.14, abs(raw_speed)))
+        min_clearance_m = 0.38
+
+        def _live_front_clearance() -> Optional[float]:
+            if rt is None:
+                return None
+            pts = getattr(rt, "latest_raw_points", None) or getattr(rt, "latest_points", None)
+            if not pts:
+                return None
+            last_mono = float(getattr(rt, "_last_scan_mono", 0.0) or 0.0)
+            if last_mono > 0.0 and (time.monotonic() - last_mono) > 3.5:
+                return None
+            sectors = compute_live_sectors_from_points(pts)
+            return sectors.get("front")
+
+        front_m = _live_front_clearance()
+        if clamped_m > 0.0 and front_m is not None and front_m < min_clearance_m:
+            return _finish(
+                False,
+                f"Refused forward walk: LD19 front obstacle at {front_m:.2f}m (< {min_clearance_m:.2f}m safety limit).",
+                {
+                    "blocked": True,
+                    "front_clearance_m": round(front_m, 3),
+                    "min_clearance_m": min_clearance_m,
+                    "requested_meters": raw_meters,
+                    "clamped_meters": clamped_m,
+                },
+            )
+
+        if abs(clamped_m) < 0.01:
+            return _finish(
+                True,
+                "Walk distance is near zero; robot remained stationary.",
+                {"requested_meters": raw_meters, "clamped_meters": 0.0, "moved": False},
+            )
+
+        direction = 1.0 if clamped_m > 0.0 else -1.0
+        speed_cms = round(direction * speed_mps * 100.0, 2)
+        duration_s = min(10.0, abs(clamped_m) / speed_mps)
+        aborted_obstacle = False
+        elapsed_s = 0.0
+        try:
+            await publish_velocity(
+                ip=ip,
+                port=ros_port,
+                x=speed_cms,
+                y=0.0,
+                yaw_rate=0.0,
+                ros_version=ros_ver,
+                robot_id=resolved_id,
+            )
+            slice_s = 0.15
+            while elapsed_s < duration_s:
+                step = min(slice_s, duration_s - elapsed_s)
+                await asyncio.sleep(step)
+                elapsed_s += step
+                if direction > 0.0:
+                    live_f = _live_front_clearance()
+                    if live_f is not None and live_f < min_clearance_m:
+                        aborted_obstacle = True
+                        front_m = live_f
+                        break
+        except Exception as exc:
+            sys.stderr.write(f"[agent.walk_distance] ROSBridge velocity error on {ip}: {exc}\n")
+            return _finish(False, f"Failed executing walk_distance: {exc}", {"clamped_meters": clamped_m})
+        finally:
+            try:
+                await publish_velocity(
+                    ip=ip,
+                    port=ros_port,
+                    x=0.0,
+                    y=0.0,
+                    yaw_rate=0.0,
+                    ros_version=ros_ver,
+                    robot_id=resolved_id,
+                )
+            except Exception as stop_exc:
+                sys.stderr.write(f"[agent.walk_distance] Zero-velocity stop error on {ip}: {stop_exc}\n")
+
+        if aborted_obstacle:
+            return _finish(
+                False,
+                f"Halted forward walk early: LD19 obstacle detected at {front_m:.2f}m (< {min_clearance_m:.2f}m).",
+                {
+                    "blocked": True,
+                    "aborted_mid_walk": True,
+                    "front_clearance_m": round(float(front_m or 0.0), 3),
+                    "clamped_meters": clamped_m,
+                    "elapsed_sec": round(elapsed_s, 2),
+                },
+            )
+
+        dir_word = "forward" if clamped_m > 0 else "backward"
+        return _finish(
+            True,
+            f"Walked {dir_word} {abs(clamped_m):.2f}m at {speed_mps:.2f} m/s and stopped cleanly.",
+            {
+                "requested_meters": raw_meters,
+                "clamped_meters": clamped_m,
+                "speed_mps": speed_mps,
+                "duration_sec": round(duration_s, 2),
+                "front_clearance_m": round(front_m, 3) if front_m is not None else None,
+            },
+        )
+
+    # --- 15. turn_angle ---
+    if name == "turn_angle":
+        if "degrees" not in args or args.get("degrees") is None:
+            raise ValueError("turn_angle requires numeric 'degrees'.")
+        try:
+            raw_deg = float(args["degrees"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"turn_angle 'degrees' must be numeric: {exc}") from exc
+        if not math.isfinite(raw_deg):
+            raise ValueError("turn_angle 'degrees' must be a finite number.")
+
+        clamped_deg = max(-180.0, min(180.0, raw_deg))
+        if abs(clamped_deg) < 1.0:
+            return _finish(
+                True,
+                "Turn angle is near zero; robot remained stationary.",
+                {"requested_degrees": raw_deg, "clamped_degrees": 0.0, "turned": False},
+            )
+
+        rad = math.radians(clamped_deg)
+        yaw_rate = 0.6 if rad > 0.0 else -0.6
+        duration_s = min(6.0, abs(rad) / abs(yaw_rate))
+        try:
+            await publish_velocity(
+                ip=ip,
+                port=ros_port,
+                x=0.0,
+                y=0.0,
+                yaw_rate=yaw_rate,
+                ros_version=ros_ver,
+                robot_id=resolved_id,
+            )
+            await asyncio.sleep(duration_s)
+        except Exception as exc:
+            sys.stderr.write(f"[agent.turn_angle] ROSBridge yaw error on {ip}: {exc}\n")
+            return _finish(False, f"Failed executing turn_angle: {exc}", {"clamped_degrees": clamped_deg})
+        finally:
+            try:
+                await publish_velocity(
+                    ip=ip,
+                    port=ros_port,
+                    x=0.0,
+                    y=0.0,
+                    yaw_rate=0.0,
+                    ros_version=ros_ver,
+                    robot_id=resolved_id,
+                )
+            except Exception as stop_exc:
+                sys.stderr.write(f"[agent.turn_angle] Zero-velocity stop error on {ip}: {stop_exc}\n")
+
+        turn_dir = "left" if clamped_deg > 0 else "right"
+        return _finish(
+            True,
+            f"Turned {turn_dir} {abs(clamped_deg):.1f} degrees and stopped cleanly.",
+            {
+                "requested_degrees": raw_deg,
+                "clamped_degrees": clamped_deg,
+                "yaw_rate_rads": yaw_rate,
+                "duration_sec": round(duration_s, 2),
+            },
+        )
 
     raise ValueError(f"Unhandled robot tool: {name!r}")

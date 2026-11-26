@@ -17,7 +17,7 @@
 
 <br>
 
-<img src="docs/assets/screenshots/01-welcome-hero-3d.png" alt="Eigenia TwinScan Studio Maker Showcase with 10,022-triangle PuppyPi Pro Three.js 3D Digital Twin and LD19 laser sweep" width="100%" />
+<img src="docs/assets/screenshots/hero-welcome-and-topology.jpg" alt="Eigenia TwinScan Studio Maker Showcase with 10,022-triangle PuppyPi Pro Three.js 3D Digital Twin and Interactive React Flow Cyber-Physical Pipeline" width="100%" />
 
 </div>
 
@@ -75,19 +75,36 @@ Drop waypoints on the 2D radar or launch **Autonomous Explore & Map**. The explo
 
 ### 3. Human-AI Hardware Co-Design & Universal Hardware Envelope (`/architect`)
 
-TwinScan is not locked to one robot. `/architect` tracks the boards and sensors you own across **6 local hardware profiles** (`PuppyPi Pro`, `Raspberry Pi 5`, `Raspberry Pi Zero 2 W`, `BBC micro:bit v2.21`, `Local LAN Camera Array`, and `Generic Sensor Module`). Pick a creativity tier from `T1 Steady` to `T5 Extreme`, lock the parts you want to use, and generate a wired 2D React Flow schematic, a 3D Three.js assembly preview, electrical power checks, and a Markdown build spec.
+TwinScan is not locked to one robot. `/architect` tracks the boards and sensors you own across **6 local hardware profiles** (`PuppyPi Pro`, `Raspberry Pi 5`, `Raspberry Pi Zero 2 W`, `BBC micro:bit v2.21`, `Local LAN Camera Array`, and `Generic Sensor Module`). Pick a creativity tier from `T1 Steady` to `T5 Extreme`, lock the parts you want to use, and generate a wired 2D React Flow schematic, a 3D Three.js assembly preview, electrical power guardrails (`85 / 100` feasibility checks), and a Markdown build spec.
 
-<img src="docs/assets/screenshots/06-architect-codesign.png" alt="Lab Architect Hardware Co-Design studio with owned parts, 2D wiring topology, and 5-tier creativity dial" width="100%" />
+<img src="docs/assets/screenshots/architect-codesign-full.jpg" alt="Lab Architect Hardware Co-Design studio with owned parts, 2D wiring topology, 3D hardware assembly, 5-tier creativity dial, and electrical guardrails" width="100%" />
 
-### 4. Interactive Architecture Topology, 4-Step Onboarding Wizard & Full Wiki (`/welcome`, `/wiki`)
+### 4. Live Teleop, Fleet PMIC Diagnostics & 9-Point Readiness Matrix (`/control`, `/catalog`)
 
-New makers do not have to read 200 files to get started. The `/wiki` workspace opens with a **4-step Onboarding Wizard** that picks your role and hardware, probes live `/health`, LiDAR, and battery endpoints in real time, and generates a tailored checklist. Every subsystem is also mapped in an interactive **React Flow** topology view and backed by 11 VitePress-ready Markdown guides in `docs/wiki/`.
+Drive PuppyPi over ROS 2 Humble with a server-side `0.5 s` dead-man's switch, 7 stance presets, and 28 verified action groups, while `/catalog` tracks live Raspberry Pi 5 DA9091 PMIC power (`5.03 V` EXT5V, `2.34 W` board power, `850 / 1600 mA` USB draw), hardware readiness across all 9 subsystems, and safe Python/ROS package updates.
 
 <table>
   <tr>
     <td width="50%">
-      <img src="docs/assets/screenshots/02-welcome-architecture-flow.png" alt="Interactive React Flow cyber-physical pipeline connecting hardware, perception, autonomy, and digital twin layers" width="100%" />
-      <br><sub><b>Interactive React Flow Topology:</b> Click any layer to inspect live benchmarks and jump into its workspace.</sub>
+      <img src="docs/assets/screenshots/control-teleop-actions.jpg" alt="Robot Control and FPV cockpit with dead-man directional pad, stance presets, and 28 verified action groups" width="100%" />
+      <br><sub><b>Robot Control & FPV (`/control`):</b> Dead-man directional pad, quick stance presets, and 28 body + 2-DOF arm action groups.</sub>
+    </td>
+    <td width="50%">
+      <img src="docs/assets/screenshots/catalog-readiness-and-pmic.jpg" alt="Fleet BOM and SBOM cockpit with live Pi 5 PMIC telemetry, 9-point readiness matrix, and package updater" width="100%" />
+      <br><sub><b>Fleet BOM & Readiness (`/catalog`):</b> Live Pi 5 PMIC/USB telemetry, 9-point hardware matrix, and safe library updater.</sub>
+    </td>
+  </tr>
+</table>
+
+### 5. Complete Maker Stack, 4-Step PuppyPi Workflow & Onboarding Wizard (`/welcome`, `/wiki`)
+
+New makers do not have to read 200 files to get started. The `/wiki` workspace opens with a **4-step Onboarding Wizard** that picks your role and hardware, probes live `/health`, LiDAR, and battery endpoints in real time, and generates a tailored checklist alongside 11 VitePress-ready Markdown guides in `docs/wiki/`.
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/assets/screenshots/showcase-puppypi-workflow.jpg" alt="4-step Hiwonder PuppyPi Pro workflow, six integrated cockpits bento grid, and end-to-end hardware prototyping loop" width="100%" />
+      <br><sub><b>PuppyPi Pro Workflow & Maker Stack:</b> From unboxing to 3D scanning, autonomous patrol, and Pi 5 / micro:bit expansion.</sub>
     </td>
     <td width="50%">
       <img src="docs/assets/screenshots/07-wiki-wizard.png" alt="4-Step Interactive Onboarding Wizard inside the Wiki workspace" width="100%" />

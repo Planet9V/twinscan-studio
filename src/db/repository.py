@@ -40,6 +40,11 @@ MANAGED_SETTING_SPECS: List[dict[str, Any]] = [
     {"key": "default_camera_yaw_offset_deg", "is_secret": False, "category": "spatial", "description": "Camera-to-LiDAR boresight yaw offset (deg)"},
     {"key": "default_wall_height_m", "is_secret": False, "category": "spatial", "description": "3D extruded wall height (m) in Three.js & Babylon.js"},
     {"key": "max_upload_mb", "is_secret": False, "category": "storage", "description": "Maximum single file upload size (MB) into PostgreSQL"},
+    {"key": "openclaw_gateway_url", "is_secret": False, "category": "openclaw", "description": "Portable OpenClaw Gateway URL (e.g. http://openclaw-gateway:18789)"},
+    {"key": "openclaw_gateway_token", "is_secret": True, "category": "openclaw", "description": "Fernet-encrypted OpenClaw Gateway authentication token"},
+    {"key": "openclaw_mcp_bearer_token", "is_secret": True, "category": "openclaw", "description": "Optional Fernet-encrypted Bearer token protecting /api/agent/mcp and /api/agent/execute"},
+    {"key": "openclaw_telegram_bot_token", "is_secret": True, "category": "openclaw", "description": "Optional Fernet-encrypted Telegram bot token for OpenClaw remote messaging"},
+    {"key": "openclaw_discord_bot_token", "is_secret": True, "category": "openclaw", "description": "Optional Fernet-encrypted Discord bot token for OpenClaw remote messaging"},
 ]
 
 MANAGED_SPEC_BY_KEY: dict[str, dict[str, Any]] = {s["key"]: s for s in MANAGED_SETTING_SPECS}

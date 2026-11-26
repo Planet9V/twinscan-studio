@@ -1,6 +1,13 @@
 {
   "mcpServers": {
-    "eigenia-puppypi": {
+    "eigenia-puppypi-http": {
+      "transport": "http",
+      "url": "http://backend:8000/api/agent/mcp",
+      "headers": {
+        "Authorization": "Bearer <OPTIONAL_TOKEN_SET_IN_CONFIG_PAGE>"
+      }
+    },
+    "eigenia-puppypi-stdio": {
       "command": ".venv/bin/python",
       "args": [
         "-m",

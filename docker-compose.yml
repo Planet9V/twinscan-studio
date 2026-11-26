@@ -83,8 +83,28 @@ services:
     depends_on:
       - backend
 
+  openclaw-gateway:
+    profiles: ["openclaw"]
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:latest}
+    container_name: eigenia-twinscan-openclaw
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:18789:18789"
+    environment:
+      TZ: ${TZ:-UTC}
+      TWINSCAN_API_URL: http://backend:8000
+      TWINSCAN_MCP_URL: http://backend:8000/api/agent/mcp
+    volumes:
+      - openclaw_state:/home/node/.openclaw
+      - ./openclaw/skills:/home/node/workspace/skills:ro
+    depends_on:
+      - backend
+
 volumes:
   pg18_data:
   neo4j_data:
   backend_data:
   twinscan_models:
+  openclaw_state:

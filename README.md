@@ -10,7 +10,7 @@
 [![Three.js & Babylon.js](https://img.shields.io/badge/3D%20Engines-Three.js%20%2B%20Babylon.js-38BDF8?style=flat-square)](frontend/src/components/twin3d)
 [![PostgreSQL 18 + pgvector](https://img.shields.io/badge/PostgreSQL-18%20%2B%20pgvector-336791?style=flat-square&logo=postgresql&logoColor=white)](docker-compose.yml)
 [![Neo4j 5](https://img.shields.io/badge/Neo4j-5%20Graph-008CC1?style=flat-square&logo=neo4j&logoColor=white)](src/graph/neo4j_store.py)
-[![Tests](https://img.shields.io/badge/pytest-166%20passing-10B981?style=flat-square)](tests)
+[![Tests](https://img.shields.io/badge/pytest-168%20passing-10B981?style=flat-square)](tests)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)](LICENSE)
 
 [Quick Start](#quick-start-3-commands) · [Live Screenshots](#inside-the-studio) · [Flagship PuppyPi Pro Example](#flagship-example-hiwonder-puppypi-pro) · [Architecture](#system-architecture) · [Full Wiki (`docs/wiki/`)](docs/wiki/README.md) · [Early Bird Founders](#early-bird-maker-founders-50-spots)
@@ -44,7 +44,7 @@ Every capability below was built and tested against a real **Hiwonder PuppyPi Pr
 | **Live LD19 LiDAR Rate** | `5.0–6.9 Hz`, single-instance deduplicated (`0` timeouts) | `src/robot/ssh_manager.py` |
 | **Battery & RTH Telemetry** | Live 2S LiPo voltage (`8.30 V` / `95%`), auto-RTH at `7.10 V` | `src/robot/explorer_engine.py` |
 | **Cloud Dependency** | `0` required cloud accounts for video, voice, or LiDAR | `src/devices/local_camera_bridge.py` |
-| **Automated Verification** | `166` passing `pytest` tests (`0` warnings), `14` Next.js 16 routes | `tests/` + `frontend/` |
+| **Automated Verification** | `168` passing `pytest` tests (`0` warnings), `14` Next.js 16 routes | `tests/` + `frontend/` |
 
 ---
 
@@ -218,7 +218,12 @@ git clone https://github.com/Planet9V/twinscan-studio.git
 cd twinscan-studio
 cp .env.example .env
 docker compose up -d --build
+
+# Optional: include the portable OpenClaw gateway sidecar
+docker compose --profile openclaw up -d --build
 ```
+
+Running on **Windows 11 (WSL 2)**, a **Linux server / 2nd Raspberry Pi 5**, or **Railway** (including `pg_dump` migration from MacBook, Tailscale robot bridging, and database-encrypted `/config` secrets)? See the full [Cross-OS Docker, WSL 2 & Railway Deployment Guide](docs/DEPLOYMENT_DOCKER_AND_RAILWAY.md).
 
 Once the four containers (`pg18`, `neo4j`, `backend`, `frontend`) report healthy:
 
@@ -258,13 +263,14 @@ Every guide in `docs/wiki/` is traced directly to source files with line-number 
 | [06 — Developer Guide](docs/wiki/06-developer-guide.md) | Developers | Backend `src/` layers, REST/WS routers, PTY SSH runner, test patterns |
 | [07 — Support & Troubleshooting](docs/wiki/07-support-troubleshooting.md) | Support | Field fixes for LD19 cables, 15-char `pkill`, WonderEcho USB 2.0, `/dev/video0` |
 | [08 — Site Tree](docs/wiki/08-site-tree.md) | Everyone | Every frontend route, query tab, slide-over drawer, and backend prefix |
+| [Docker, WSL 2 & Railway Deployment](docs/DEPLOYMENT_DOCKER_AND_RAILWAY.md) | Operators / Cloud | macOS, Windows 11 WSL 2, `pg_dump` migration, Pi 5 server, Railway + Tailscale, DB-encrypted secrets |
 
 ---
 
 ## Local Development & Tests
 
 ```bash
-# Backend test suite (166 unit & API integration tests, 0 warnings)
+# Backend test suite (168 unit & API integration tests, 0 warnings)
 .venv/bin/pytest -v
 
 # Frontend TypeScript check & production build (14 static App Router pages)

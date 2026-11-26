@@ -4,7 +4,9 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   Archive,
+  Check,
   CheckCircle2,
+  Copy,
   Database,
   Eye,
   EyeOff,
@@ -14,12 +16,15 @@ import {
   KeyRound,
   Layers,
   Loader2,
+  Lock,
+  Plug,
   RefreshCw,
   Save,
   ShieldCheck,
   Sparkles,
   Trash2,
   Upload,
+  Wand2,
   XCircle,
   Zap,
 } from "lucide-react";
@@ -69,6 +74,60 @@ const OPENROUTER_MODEL_SETTING_CATEGORIES: Record<string, ModelCategoryKey> = {
   openrouter_embedding_model: "embedding",
 };
 
+const OPENCLAW_FIELDS = [
+  {
+    key: "openclaw_gateway_url",
+    label: "OpenClaw Gateway URL",
+    isSecret: false,
+    placeholder: "http://openclaw-gateway:18789",
+    helper: "Internal Docker service URL (or Tailscale/LAN URL) for your portable OpenClaw gateway.",
+  },
+  {
+    key: "openclaw_gateway_token",
+    label: "OpenClaw Gateway Token",
+    isSecret: true,
+    placeholder: "Enter OpenClaw gateway auth token...",
+    helper: "Authenticates requests between TwinScan Studio and the OpenClaw gateway.",
+  },
+  {
+    key: "openclaw_mcp_bearer_token",
+    label: "MCP Endpoint Bearer Token",
+    isSecret: true,
+    placeholder: "Leave unset for open local Docker, or generate a strong Bearer token...",
+    helper:
+      "When set, POST /api/agent/mcp and POST /api/agent/execute require Authorization: Bearer <token> (recommended for Railway / cloud).",
+  },
+  {
+    key: "openclaw_telegram_bot_token",
+    label: "Telegram Bot Token (Optional)",
+    isSecret: true,
+    placeholder: "123456:ABC-DEF... (optional)",
+    helper: "Optional Telegram channel token stored encrypted in PostgreSQL 18.",
+  },
+  {
+    key: "openclaw_discord_bot_token",
+    label: "Discord Bot Token (Optional)",
+    isSecret: true,
+    placeholder: "MTIzNDU2... (optional)",
+    helper: "Optional Discord channel token stored encrypted in PostgreSQL 18.",
+  },
+] as const;
+
+const OPENCLAW_KEY_SET = new Set<string>(OPENCLAW_FIELDS.map((f) => f.key));
+
+function generateStrongBearerToken(): string {
+  const bytes = new Uint8Array(32);
+  if (typeof window !== "undefined" && window.crypto?.getRandomValues) {
+    window.crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < bytes.length; i += 1) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
+  const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `eg_mcp_${hex}`;
+}
+
 function formatUsdAmount(val?: number | null): string {
   if (val === null || val === undefined || !Number.isFinite(val)) return "Unlimited";
   return `$${val.toFixed(val < 1 && val > 0 ? 4 : 2)}`;
@@ -111,6 +170,7 @@ export function AdminConfigPanel({
   const [settings, setSettings] = useState<AdminSettingItem[]>([]);
   const [draftValues, setDraftValues] = useState<Record<string, string>>({});
   const [revealedSecrets, setRevealedSecrets] = useState<Record<string, boolean>>({});
+  const [copiedBearerDraft, setCopiedBearerDraft] = useState(false);
   const [embeddingDrift, setEmbeddingDrift] = useState<{
     active_model: string;
     drifted_asset_count: number;
@@ -162,6 +222,9 @@ export function AdminConfigPanel({
       const nextDraft: Record<string, string> = {};
       for (const item of loadedSettings) {
         nextDraft[item.key] = item.is_secret ? "" : String(item.value ?? "");
+      }
+      if (!("openclaw_gateway_url" in nextDraft)) {
+        nextDraft["openclaw_gateway_url"] = "http://openclaw-gateway:18789";
       }
       setDraftValues(nextDraft);
     } catch (err) {
@@ -217,9 +280,18 @@ export function AdminConfigPanel({
     loadFiles();
   }, [loadFiles]);
 
+  const settingsByKey = useMemo(() => {
+    const map: Record<string, AdminSettingItem> = {};
+    for (const item of settings) {
+      map[item.key] = item;
+    }
+    return map;
+  }, [settings]);
+
   const groupedSettings = useMemo(() => {
     const groups: Record<string, AdminSettingItem[]> = {};
     for (const item of settings) {
+      if (OPENCLAW_KEY_SET.has(item.key)) continue;
       const cat = item.category || "general";
       if (section === "ai" && !["vision", "spatial", "general"].includes(cat)) continue;
       if (section === "databases" && !["neo4j", "storage"].includes(cat)) continue;
@@ -267,6 +339,57 @@ export function AdminConfigPanel({
       await Promise.all([loadSettings(), loadLedgers()]);
       onSettingsChanged();
     });
+
+  const handleSaveOpenClawSecrets = () =>
+    runAction("save-openclaw-secrets", async () => {
+      const payload: Record<string, string> = {};
+      for (const field of OPENCLAW_FIELDS) {
+        const draft = draftValues[field.key] ?? "";
+        const existing = settingsByKey[field.key];
+        if (field.isSecret) {
+          if (draft.trim()) {
+            payload[field.key] = draft.trim();
+          }
+        } else {
+          const trimmed = draft.trim();
+          const currentVal = String(existing?.value ?? "");
+          if (trimmed && trimmed !== currentVal) {
+            payload[field.key] = trimmed;
+          }
+        }
+      }
+      if (Object.keys(payload).length === 0) {
+        setStatusBanner({
+          kind: "ok",
+          text: "No modified OpenClaw secrets or gateway URL to save. Existing encrypted values were kept intact.",
+        });
+        return;
+      }
+      const resp = await saveAdminSettings(payload, adminToken);
+      setStatusBanner({
+        kind: "ok",
+        text: `Saved ${resp.updated_count} OpenClaw/MCP setting(s) Fernet-encrypted in PostgreSQL 18 (hot-reloaded).`,
+      });
+      await Promise.all([loadSettings(), loadLedgers()]);
+      onSettingsChanged();
+    });
+
+  const handleGenerateBearerToken = () => {
+    const token = generateStrongBearerToken();
+    setDraftValues((prev) => ({ ...prev, openclaw_mcp_bearer_token: token }));
+    setRevealedSecrets((prev) => ({ ...prev, openclaw_mcp_bearer_token: true }));
+    setCopiedBearerDraft(false);
+  };
+
+  const handleCopyBearerDraft = () => {
+    const draft = (draftValues["openclaw_mcp_bearer_token"] ?? "").trim();
+    if (!draft) return;
+    if (typeof navigator !== "undefined" && navigator.clipboard) {
+      void navigator.clipboard.writeText(draft).catch(() => {});
+    }
+    setCopiedBearerDraft(true);
+    window.setTimeout(() => setCopiedBearerDraft(false), 1800);
+  };
 
   const handleRefreshModels = (forceRefresh = true) =>
     runAction("refresh-models", async () => {
@@ -794,6 +917,186 @@ export function AdminConfigPanel({
               </Card>
             ))}
           </div>
+
+          {/* Dedicated OpenClaw & MCP Database-Encrypted Secrets Card */}
+          <Card className="border-eigenia-orange/35 bg-eigenia-surface">
+            <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="space-y-1">
+                <CardTitle className="flex items-center gap-2">
+                  <Plug className="h-4 w-4 text-eigenia-orange" />
+                  OpenClaw &amp; MCP Security (Stored Encrypted in PostgreSQL 18)
+                </CardTitle>
+                <p className="text-[11px] text-eigenia-muted">
+                  Portable Docker &amp; Railway credentials for OpenClaw Gateway, HTTP/Stdio MCP Bearer Auth, and optional bot channels.
+                </p>
+              </div>
+              <Badge variant="sky" className="w-fit font-mono text-[10px]">
+                <Lock className="h-3 w-3" />
+                FERNET AES-128 · PG18
+              </Badge>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Zero-Secrets Callout Banner */}
+              <div className="flex items-start gap-2.5 rounded-md border border-eigenia-sky/35 bg-eigenia-sky/10 px-3 py-2.5 text-xs text-eigenia-ink">
+                <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-eigenia-sky" />
+                <span>
+                  Zero secrets in Railway or <code className="rounded bg-eigenia-obsidian px-1 py-0.5 font-mono text-[11px] text-white">.env</code> — all tokens below are Fernet-encrypted in PostgreSQL 18 and hot-reloaded instantly.
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                {OPENCLAW_FIELDS.map((field) => {
+                  const meta = settingsByKey[field.key];
+                  const isSet = Boolean(meta?.is_set);
+                  const maskedPreview = meta?.value ? String(meta.value) : "";
+                  const revealed = Boolean(revealedSecrets[field.key]);
+                  const draftVal = draftValues[field.key] ?? "";
+                  const isBearerField = field.key === "openclaw_mcp_bearer_token";
+
+                  return (
+                    <div
+                      key={field.key}
+                      className={`space-y-1.5 rounded-md border border-white/10 bg-eigenia-obsidian/70 p-3 ${
+                        isBearerField ? "lg:col-span-2" : ""
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <label
+                            htmlFor={`cfg-${field.key}`}
+                            className="font-mono text-[11px] font-semibold text-white"
+                          >
+                            {field.label}
+                          </label>
+                          <span className="font-mono text-[10px] text-eigenia-muted">
+                            ({field.key})
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {field.isSecret ? (
+                            <Badge
+                              variant={isSet ? "sky" : "amber"}
+                              className={
+                                isSet
+                                  ? "border-emerald-500/40 bg-emerald-500/15 font-mono text-[9px] text-emerald-300"
+                                  : "font-mono text-[9px]"
+                              }
+                            >
+                              {isSet
+                                ? `Configured${maskedPreview ? ` (${maskedPreview})` : ""}`
+                                : "Not Set"}
+                            </Badge>
+                          ) : (
+                            <Badge variant="neutral" className="font-mono text-[9px]">
+                              {meta?.persisted ? "PG18 Persisted" : "Default"}
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Input
+                          id={`cfg-${field.key}`}
+                          type={field.isSecret && !revealed ? "password" : "text"}
+                          value={draftVal}
+                          placeholder={
+                            field.isSecret && isSet
+                              ? `Stored encrypted (${maskedPreview || "****"}) — type to rotate`
+                              : field.placeholder
+                          }
+                          onChange={(e) =>
+                            setDraftValues((prev) => ({
+                              ...prev,
+                              [field.key]: e.target.value,
+                            }))
+                          }
+                          className="min-w-[220px] flex-1 font-mono text-[11px]"
+                        />
+
+                        {field.isSecret && (
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="secondary"
+                            title={revealed ? "Hide value" : "Show value"}
+                            onClick={() =>
+                              setRevealedSecrets((prev) => ({
+                                ...prev,
+                                [field.key]: !prev[field.key],
+                              }))
+                            }
+                          >
+                            {revealed ? (
+                              <EyeOff className="h-3.5 w-3.5" />
+                            ) : (
+                              <Eye className="h-3.5 w-3.5" />
+                            )}
+                          </Button>
+                        )}
+
+                        {isBearerField && (
+                          <>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="sky"
+                              onClick={handleGenerateBearerToken}
+                              className="shrink-0"
+                            >
+                              <Wand2 className="h-3.5 w-3.5" />
+                              Generate Strong Token
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              disabled={!draftVal.trim()}
+                              onClick={handleCopyBearerDraft}
+                              title="Copy draft token before saving"
+                              className="shrink-0"
+                            >
+                              {copiedBearerDraft ? (
+                                <>
+                                  <Check className="h-3.5 w-3.5 text-emerald-400" />
+                                  Copied
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="h-3.5 w-3.5" />
+                                  Copy
+                                </>
+                              )}
+                            </Button>
+                          </>
+                        )}
+                      </div>
+
+                      <p className="text-[10px] text-eigenia-muted">{field.helper}</p>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3">
+                <span className="font-mono text-[10px] text-eigenia-muted">
+                  Blank secret fields are skipped on save so existing PostgreSQL 18 tokens are never accidentally overwritten.
+                </span>
+                <Button
+                  type="button"
+                  disabled={busyAction !== null}
+                  onClick={handleSaveOpenClawSecrets}
+                  className="font-semibold"
+                >
+                  {busyAction === "save-openclaw-secrets" ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="h-3.5 w-3.5" />
+                  )}
+                  Save OpenClaw Secrets to PostgreSQL
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* TAB 2: DIAGNOSTICS & SYNC */}

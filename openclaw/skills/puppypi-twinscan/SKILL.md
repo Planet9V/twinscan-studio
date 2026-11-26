@@ -1,11 +1,30 @@
 ---
 name: puppypi-twinscan
-description: Control, inspect, scan, and autonomously explore with a Hiwonder PuppyPi Pro quadruped robot via Eigenia TwinScan's 10-tool MCP Bridge (100% local, zero cloud lock-in).
+description: Control, inspect, scan, and autonomously explore with a Hiwonder PuppyPi Pro quadruped robot via Eigenia TwinScan's 10-tool MCP Bridge (portable Docker HTTP MCP + host stdio MCP).
 ---
 
 # Eigenia TwinScan — Hiwonder PuppyPi Pro Skill (OpenClaw + MCP)
 
 Use this skill whenever the user asks to inspect, speak through, move, capture camera snapshots from, recall Spatial Memory from, 3D-scan a room with, or autonomously explore with their **Hiwonder PuppyPi Pro** (Raspberry Pi 5 + LD19 360° LiDAR + UVC FPV Camera + WonderEcho Pro + ROS 2 Humble).
+
+## Two Portable MCP Transports
+
+1. **Docker / Railway HTTP MCP (Recommended for containerized OpenClaw):**
+   - Endpoint inside Docker Compose (`docker compose --profile openclaw up -d`): `http://backend:8000/api/agent/mcp`
+   - Endpoint from host machine: `http://localhost:8000/api/agent/mcp`
+   - Supports JSON-RPC 2.0 `initialize`, `notifications/initialized`, `ping`, `tools/list`, and `tools/call`.
+2. **Host Stdio MCP (Local CLI / Desktop OpenClaw):**
+   - Command: `TWINSCAN_API_URL=http://localhost:8000 .venv/bin/python -m src.agent.mcp_bridge`
+
+## Optional Bearer Authentication (Stored Encrypted in PostgreSQL 18)
+
+When `openclaw_mcp_bearer_token` is configured in the TwinScan `/config` page (Fernet-encrypted inside PostgreSQL 18 — zero secrets in `.env` or Railway Variables), include this header on every `POST /api/agent/mcp` and `POST /api/agent/execute` request:
+
+```http
+Authorization: Bearer <openclaw_mcp_bearer_token>
+```
+
+When `openclaw_mcp_bearer_token` is blank (default for local Docker), local requests are accepted without a header.
 
 ## Available MCP Tools (`eigenia-puppypi`)
 
@@ -25,9 +44,3 @@ Use this skill whenever the user asks to inspect, speak through, move, capture c
 - Always check `get_robot_status` before starting `start_autonomous_explore` if battery voltage is unknown (default auto-RTH threshold is `7.1 V` for 2S LiPo).
 - If the user says "stop", "freeze", "halt", or "emergency stop", call **`stop_robot_estop`** immediately as the first tool call.
 - Never invent shell commands or raw ROS topics — always use the 10 validated MCP tools above.
-
-## Quick Setup
-
-1. Ensure Eigenia TwinScan backend is running (`http://localhost:8000`).
-2. Copy this skill folder into `~/.openclaw/skills/puppypi-twinscan/`.
-3. Merge `openclaw/mcp-config.json` into your OpenClaw MCP servers configuration.

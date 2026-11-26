@@ -168,6 +168,11 @@ class TwinScanRuntimeState:
             "default_camera_yaw_offset_deg": str(s.default_camera_yaw_offset_deg),
             "default_wall_height_m": str(s.default_wall_height_m),
             "max_upload_mb": str(s.max_upload_mb),
+            "openclaw_gateway_url": "http://openclaw-gateway:18789",
+            "openclaw_gateway_token": "",
+            "openclaw_mcp_bearer_token": "",
+            "openclaw_telegram_bot_token": "",
+            "openclaw_discord_bot_token": "",
         }
 
     def apply_runtime_settings(self) -> dict[str, str]:

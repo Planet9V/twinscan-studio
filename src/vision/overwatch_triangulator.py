@@ -90,6 +90,10 @@ class OverwatchCalibration:
     vfov_deg: float = 48.0
     mode: str = "triangulate"
     homography_3x3: Optional[List[List[float]]] = None
+    space_id: Optional[str] = None
+    calibration_method: str = "default"
+    calibrated_at: Optional[float] = None
+    reprojection_error_px: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize calibration parameters to a JSON-safe dictionary."""
@@ -103,6 +107,15 @@ class OverwatchCalibration:
             "vfov_deg": round(float(self.vfov_deg), 2),
             "mode": str(self.mode),
             "has_homography": self.homography_3x3 is not None,
+            "space_id": self.space_id,
+            "calibration_method": str(self.calibration_method or "default"),
+            "calibrated": self.calibration_method != "default" or self.homography_3x3 is not None,
+            "calibrated_at": self.calibrated_at,
+            "reprojection_error_px": (
+                round(float(self.reprojection_error_px), 2)
+                if self.reprojection_error_px is not None
+                else None
+            ),
         }
 
 
@@ -360,6 +373,14 @@ class OverwatchCameraManager:
                     h_mat = cfg.get("homography_3x3")
                     if isinstance(h_mat, list) and len(h_mat) == 3:
                         cal.homography_3x3 = h_mat
+                    if "space_id" in cfg:
+                        cal.space_id = str(cfg["space_id"]) if cfg["space_id"] else None
+                    if cfg.get("calibration_method"):
+                        cal.calibration_method = str(cfg["calibration_method"])
+                    if cfg.get("calibrated_at") is not None:
+                        cal.calibrated_at = float(cfg["calibrated_at"])
+                    if cfg.get("reprojection_error_px") is not None:
+                        cal.reprojection_error_px = float(cfg["reprojection_error_px"])
         except Exception as exc:
             sys.stderr.write(f"[overwatch.persist] Failed to load calibrations from DB: {exc}\n")
 
@@ -837,6 +858,7 @@ class OverwatchCameraManager:
                     "fps": s.fps,
                     "age_sec": s_age,
                     "detections_count": len(s.detections) if s_online else 0,
+                    "detections": list(s.detections) if s_online else [],
                     "calibration": s.calibration.to_dict(),
                 }
 
@@ -893,6 +915,17 @@ class OverwatchCameraManager:
                 if fld in updates and updates[fld] is not None:
                     val = float(updates[fld])
                     setattr(cal, fld, max(lo, min(hi, val)))
+            if "space_id" in updates:
+                cal.space_id = str(updates["space_id"]).strip() or None if updates["space_id"] is not None else None
+            if "calibration_method" in updates and updates["calibration_method"]:
+                cal.calibration_method = str(updates["calibration_method"]).strip()
+                cal.calibrated_at = time.time()
+            elif any(k in updates and updates[k] is not None for k in ("x_m", "y_m", "z_m", "yaw_deg", "pitch_deg")):
+                if cal.calibration_method == "default":
+                    cal.calibration_method = "manual"
+                cal.calibrated_at = time.time()
+            if "reprojection_error_px" in updates and updates["reprojection_error_px"] is not None:
+                cal.reprojection_error_px = float(updates["reprojection_error_px"])
         self._persist_calibrations()
         return self.get_status(camera_id=slot.camera_id)
 
@@ -1062,7 +1095,14 @@ class OverwatchCameraManager:
             height=h,
             cal=cal,
         )
-        self.update_calibration(solved["calibration"], camera_id=cid)
+        self.update_calibration(
+            {
+                **solved["calibration"],
+                "calibration_method": "homography",
+                "reprojection_error_px": solved.get("reprojection_error_px"),
+            },
+            camera_id=cid,
+        )
         with self._lock:
             slot = self._get_or_create_slot(cid)
             slot.calibration.homography_3x3 = solved["homography_3x3"]

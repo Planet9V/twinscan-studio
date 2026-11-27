@@ -68,6 +68,7 @@ def fuse_multicam_room_digital_twin(
     puppypi_jpeg: Optional[bytes] = None,
     resolution: str = "medium",
     allow_model_download: bool = True,
+    camera_ids: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """Fuse all active Overwatch cameras + optional PuppyPi FPV + LD19 LiDAR into one 3D ``.glb``.
 
@@ -106,14 +107,20 @@ def fuse_multicam_room_digital_twin(
     total_verts = 0
     total_tris = 0
 
-    # 1) Reconstruct each online Overwatch fixed camera (usb_4k, macbook_cam, ...)
+    # 1) Reconstruct each online Overwatch fixed camera (usb_4k, macbook_cam, pi5_4k, pi4_cam, ...)
+    allowed_cids = set(camera_ids) if camera_ids else None
     for cid, meta in cameras_map.items():
         if not meta.get("online"):
+            continue
+        if allowed_cids is not None and cid not in allowed_cids:
+            continue
+        cal = meta.get("calibration") or {}
+        cam_space = cal.get("space_id")
+        if space_id and cam_space and str(cam_space) != str(space_id):
             continue
         raw_jpeg = overwatch_manager.get_raw_frame_jpeg(camera_id=cid)
         if not raw_jpeg:
             continue
-        cal = meta.get("calibration") or {}
         cam_x = float(cal.get("x_m", 0.0))
         cam_y = float(cal.get("y_m", -2.2))
         cam_z = float(cal.get("z_m", 1.4))

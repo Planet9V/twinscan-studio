@@ -36,6 +36,7 @@ class OverwatchCalibrationUpdate(BaseModel):
     hfov_deg: Optional[float] = Field(default=None, ge=10.0, le=165.0)
     vfov_deg: Optional[float] = Field(default=None, ge=10.0, le=145.0)
     mode: Optional[str] = Field(default=None, max_length=32)
+    space_id: Optional[str] = Field(default=None, max_length=64)
 
 
 def _get_overwatch_manager(request: Request) -> OverwatchCameraManager:
@@ -604,5 +605,105 @@ async def delete_remote_overwatch_source(request: Request, camera_id: str) -> Di
     try:
         removed = await puller.remove_source(camera_id)
         return {"ok": True, "removed": removed, "camera_id": camera_id}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/discover-cameras")
+async def discover_overwatch_cameras(request: Request) -> Dict[str, Any]:
+    """Auto-discover available Pi, PuppyPi FPV, and remote cameras ready to add to Overwatch."""
+    from src.vision.fleet_camera_discovery import discover_fleet_cameras
+
+    return await discover_fleet_cameras(
+        robot_store=getattr(request.app.state, "robot_store", None),
+        remote_puller=_get_remote_puller(request),
+        overwatch_manager=_get_overwatch_manager(request),
+    )
+
+
+class SelfCalStartRequest(BaseModel):
+    """Start an on-demand multi-camera self-calibration session."""
+
+    camera_ids: Optional[List[str]] = Field(default=None)
+
+
+class SelfCalSampleRequest(BaseModel):
+    """Capture one floor correspondence for active self-calibration cameras."""
+
+    world_xy: Optional[Tuple[float, float]] = Field(default=None)
+    manual_observations: Optional[Dict[str, Tuple[float, float]]] = Field(default=None)
+    source: str = Field(default="robot_pose", max_length=32)
+
+
+def _get_self_cal(request: Request):
+    from src.vision.self_calibration import SelfCalibrationCoordinator
+
+    coord = getattr(request.app.state, "overwatch_self_cal", None)
+    if coord is None:
+        coord = SelfCalibrationCoordinator()
+        request.app.state.overwatch_self_cal = coord
+    return coord
+
+
+@router.get("/self-calibrate/status")
+async def get_self_calibration_status(request: Request) -> Dict[str, Any]:
+    """Return current on-demand self-calibration session progress."""
+    coord = _get_self_cal(request)
+    return {"ok": True, "session": coord.get_session()}
+
+
+@router.post("/self-calibrate/start")
+async def start_self_calibration(
+    request: Request,
+    payload: SelfCalStartRequest,
+) -> Dict[str, Any]:
+    """Start a fresh on-demand self-calibration session for selected or all active cameras."""
+    coord = _get_self_cal(request)
+    mgr = _get_overwatch_manager(request)
+    try:
+        session = coord.start_session(overwatch_manager=mgr, camera_ids=payload.camera_ids)
+        return {"ok": True, "session": session}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/self-calibrate/sample")
+async def record_self_calibration_sample(
+    request: Request,
+    payload: SelfCalSampleRequest,
+) -> Dict[str, Any]:
+    """Record one robot-world-to-pixel correspondence across all cameras observing PuppyPi."""
+    coord = _get_self_cal(request)
+    mgr = _get_overwatch_manager(request)
+    world_xy = payload.world_xy
+    if world_xy is None:
+        runtime = getattr(request.app.state, "runtime", None)
+        pose = getattr(runtime, "robot_pose", None) if runtime is not None else None
+        if isinstance(pose, dict) and pose.get("x") is not None and pose.get("y") is not None:
+            world_xy = (float(pose["x"]), float(pose["y"]))
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="No live PuppyPi LiDAR pose available; pass explicit world_xy [x_m, y_m].",
+            )
+    try:
+        session = coord.record_sample(
+            overwatch_manager=mgr,
+            world_xy=world_xy,
+            manual_observations=payload.manual_observations,
+            source=payload.source,
+        )
+        return {"ok": True, "session": session}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/self-calibrate/solve")
+async def solve_self_calibration(request: Request) -> Dict[str, Any]:
+    """Solve and persist floor homographies and 3D extrinsics for all ready cameras."""
+    coord = _get_self_cal(request)
+    mgr = _get_overwatch_manager(request)
+    try:
+        return coord.solve_session(overwatch_manager=mgr)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

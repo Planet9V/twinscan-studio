@@ -116,10 +116,13 @@ class RemoteOverwatchPullerManager:
             Number of remote camera sources loaded from storage.
         """
         self._repo = repo
-        if repo is None or not hasattr(repo, "get_raw_settings"):
+        if repo is None:
+            return 0
+        getter = getattr(repo, "get_settings_raw", None) or getattr(repo, "get_raw_settings", None)
+        if getter is None:
             return 0
         try:
-            raw = repo.get_raw_settings()
+            raw = getter() or {}
             blob = str(raw.get(REMOTE_SOURCES_SETTING_KEY) or "").strip()
             if not blob:
                 return 0

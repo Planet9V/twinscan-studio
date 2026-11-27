@@ -12,6 +12,12 @@ export interface OverwatchCalibration {
   hfov_deg: number;
   vfov_deg: number;
   mode: OverwatchMode;
+  has_homography?: boolean;
+  space_id?: string | null;
+  calibration_method?: string;
+  calibrated?: boolean;
+  calibrated_at?: number | null;
+  reprojection_error_px?: number | null;
 }
 
 export interface OverwatchDetection {
@@ -46,6 +52,8 @@ export interface OverwatchCameraSlot {
   fps: number;
   age_sec: number | null;
   detections_count: number;
+  detections?: OverwatchDetection[];
+  calibration?: OverwatchCalibration;
 }
 
 export interface OverwatchStatus {
@@ -453,6 +461,142 @@ export async function suggestBlindSpotMappingRoute(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ max_waypoints: maxWaypoints, safe_radius_m: safeRadiusM }),
     },
+    1
+  );
+}
+
+export interface DiscoveredFleetCamera {
+  id: string;
+  kind: "pi_mjpg" | "robot_fpv" | string;
+  node_id: string;
+  node_name: string;
+  ip_address: string;
+  camera_name: string;
+  suggested_camera_id: string;
+  stream_url: string;
+  snapshot_url: string;
+  resolution: string;
+  fps: number;
+  online: boolean;
+  already_added: boolean;
+  active_camera_id: string | null;
+}
+
+export interface RemoteOverwatchSource {
+  camera_id: string;
+  stream_url: string;
+  camera_name: string;
+  fps: number;
+  enabled: boolean;
+  connected: boolean;
+  frames_ingested: number;
+  last_frame_age_s: number | null;
+  last_error: string | null;
+  reconnect_count: number;
+}
+
+export interface SelfCalibrationSessionState {
+  session_id: string;
+  target_cameras: string[];
+  started_at: number;
+  sample_count: number;
+  per_camera_counts: Record<string, number>;
+  ready_cameras: string[];
+  samples: Array<{
+    sample_id: string;
+    world_xy: [number, number];
+    observations: Record<string, [number, number]>;
+    captured_at: number;
+    source: string;
+  }>;
+  solved_results: Record<string, { ok: boolean; samples?: number; reprojection_error_px?: number; error?: string }>;
+  captured_cameras?: string[];
+}
+
+export async function discoverOverwatchCameras(): Promise<{
+  ok: boolean;
+  discovered: DiscoveredFleetCamera[];
+  remote_sources: RemoteOverwatchSource[];
+  active_slots: Record<string, OverwatchCameraSlot>;
+  count: number;
+}> {
+  return requestOverwatchJson("/api/overwatch/discover-cameras", undefined, 1);
+}
+
+export async function listRemoteOverwatchSources(): Promise<{
+  sources: RemoteOverwatchSource[];
+  count: number;
+}> {
+  return requestOverwatchJson("/api/overwatch/remote-sources", undefined, 1);
+}
+
+export async function upsertRemoteOverwatchSource(payload: {
+  camera_id: string;
+  stream_url: string;
+  camera_name?: string;
+  fps?: number;
+  enabled?: boolean;
+}): Promise<{ ok: boolean; source: RemoteOverwatchSource }> {
+  return requestOverwatchJson(
+    "/api/overwatch/remote-sources",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    1
+  );
+}
+
+export async function deleteRemoteOverwatchSource(
+  cameraId: string
+): Promise<{ ok: boolean; removed: boolean; camera_id: string }> {
+  return requestOverwatchJson(
+    `/api/overwatch/remote-sources/${encodeURIComponent(cameraId)}`,
+    { method: "DELETE" },
+    1
+  );
+}
+
+export async function startSelfCalibration(
+  cameraIds?: string[]
+): Promise<{ ok: boolean; session: SelfCalibrationSessionState }> {
+  return requestOverwatchJson(
+    "/api/overwatch/self-calibrate/start",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ camera_ids: cameraIds ?? null }),
+    },
+    1
+  );
+}
+
+export async function recordSelfCalibrationSample(payload: {
+  world_xy?: [number, number] | null;
+  manual_observations?: Record<string, [number, number]> | null;
+  source?: string;
+}): Promise<{ ok: boolean; session: SelfCalibrationSessionState }> {
+  return requestOverwatchJson(
+    "/api/overwatch/self-calibrate/sample",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+    1
+  );
+}
+
+export async function solveSelfCalibration(): Promise<{
+  ok: boolean;
+  results: Record<string, { ok: boolean; samples?: number; reprojection_error_px?: number; error?: string }>;
+  session: SelfCalibrationSessionState;
+  geometry: OverwatchGeometry;
+}> {
+  return requestOverwatchJson(
+    "/api/overwatch/self-calibrate/solve",
+    { method: "POST" },
     1
   );
 }

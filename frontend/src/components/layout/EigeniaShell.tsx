@@ -18,6 +18,7 @@ import {
   Crosshair,
   Gamepad2,
   HardDrive,
+  Layers,
   LayoutDashboard,
   MapPin,
   Mic,
@@ -54,6 +55,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   // Live Operations
   { href: "/", label: "Mission Control", shortLabel: "Mission", group: "operations", icon: LayoutDashboard },
+  { href: "/room-studio", label: "Room Twin Studio", shortLabel: "Room Studio", group: "operations", icon: Layers },
   { href: "/twin", label: "Rooms & 3D Map", shortLabel: "Rooms & 3D", group: "operations", icon: Radar },
   { href: "/overwatch", label: "Overwatch Cameras", shortLabel: "Overwatch", group: "operations", icon: Crosshair },
   { href: "/control", label: "Drive & FPV", shortLabel: "Drive", group: "operations", icon: Gamepad2 },

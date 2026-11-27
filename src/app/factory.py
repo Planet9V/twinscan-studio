@@ -19,6 +19,7 @@ from src.api.routes_enrichment import router as enrichment_router
 from src.api.routes_lidar import router as lidar_router
 from src.api.routes_overwatch import router as overwatch_router
 from src.api.routes_flasher import router as flasher_router
+from src.api.routes_room_studio import router as room_studio_router
 from src.api.routes_robots import router as robots_router
 from src.api.routes_twin import router as twin_router
 from src.api.routes_vision import router as vision_router
@@ -279,6 +280,7 @@ def create_app(
     app.include_router(agent_router)
     app.include_router(overwatch_router)
     app.include_router(flasher_router)
+    app.include_router(room_studio_router)
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, Any]:

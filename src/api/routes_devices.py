@@ -400,6 +400,19 @@ async def seed_starter_lab_inventory(request: Request) -> Dict[str, Any]:
     return {"seeded": seeded, "items": items}
 
 
+@router.post("/inventory/sync-fleet")
+async def sync_fleet_hardware_to_inventory(
+    request: Request,
+    probe_live: bool = Query(default=True),
+) -> Dict[str, Any]:
+    """Probe all registered fleet Pis/robots for live USB/serial peripherals and sync into Lab Architect."""
+    from src.devices.fleet_hardware_sync import sync_fleet_to_architect
+
+    robot_store = getattr(request.app.state, "robot_store", None)
+    ai_store = request.app.state.robot_ai_store
+    return await sync_fleet_to_architect(robot_store=robot_store, ai_store=ai_store, probe_live=probe_live)
+
+
 # ---------------------------------------------------------------------------
 # Human-AI Co-Design Lab Architect
 # ---------------------------------------------------------------------------

@@ -195,6 +195,26 @@ def create_app(
         if cfg.database_url:
             liveness_task = asyncio.create_task(_robot_liveness_loop())
             auto_attach_task = asyncio.create_task(_auto_attach_live_robot_lidar(app))
+
+            async def _startup_fleet_sync() -> None:
+                try:
+                    from src.devices.fleet_hardware_sync import sync_fleet_to_architect
+
+                    await sync_fleet_to_architect(
+                        robot_store=app.state.robot_store,
+                        ai_store=app.state.robot_ai_store,
+                        probe_live=True,
+                    )
+                except Exception as exc:
+                    sys.stderr.write(f"[fleet_sync.startup] Background sync warning: {exc}\n")
+
+            asyncio.create_task(_startup_fleet_sync())
+        await app.state.remote_overwatch_puller.start_all(
+            overwatch_manager=app.state.overwatch_manager,
+            ai_vision_engine=app.state.ai_vision_engine,
+            ai_store=app.state.robot_ai_store,
+            runtime=app.state.runtime,
+        )
         try:
             yield
         finally:
@@ -205,6 +225,7 @@ def create_app(
                         await bg
                     except asyncio.CancelledError:
                         pass
+            await app.state.remote_overwatch_puller.stop_all()
             await app.state.sentry_manager.stop_all()
             await app.state.conversation_manager.stop_all()
             await app.state.explorer_manager.stop_all()
@@ -226,6 +247,11 @@ def create_app(
     app.state.ai_vision_engine = ai_vision_engine
     overwatch_manager.attach_repository(runtime.repo)
     app.state.overwatch_manager = overwatch_manager
+    from src.vision.remote_camera_puller import RemoteOverwatchPullerManager
+
+    remote_overwatch_puller = RemoteOverwatchPullerManager()
+    remote_overwatch_puller.attach_repository(runtime.repo)
+    app.state.remote_overwatch_puller = remote_overwatch_puller
     app.state.patrol_manager = patrol_manager
     app.state.explorer_manager = explorer_manager
     app.state.wake_manager = wake_manager

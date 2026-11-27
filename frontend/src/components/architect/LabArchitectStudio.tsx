@@ -76,6 +76,7 @@ import {
   refineDesignBlueprint,
   seedLabInventory,
   sendMicrobitCommand,
+  syncFleetHardwareToInventory,
   updateInventoryItem,
   type ArchitectIdea,
   type ArchitectPersona,
@@ -467,6 +468,23 @@ export function LabArchitectStudio() {
   }, [selectedNodeId, activeBlueprint]);
 
   // --- Handlers ---
+
+  const handleSyncLiveFleet = async () => {
+    setBusyAction("sync_fleet");
+    setBanner(null);
+    try {
+      const res = await syncFleetHardwareToInventory(true);
+      await refreshAll();
+      setBanner({
+        kind: "ok",
+        text: `Synced ${res.synced_hosts} live fleet node(s) + ${res.synced_peripherals} attached USB peripheral(s) into Lab Architect.`,
+      });
+    } catch (err) {
+      setBanner({ kind: "error", text: err instanceof Error ? err.message : "Fleet hardware sync failed." });
+    } finally {
+      setBusyAction(null);
+    }
+  };
 
   const handleSeedLab = async () => {
     setBusyAction("seed");
@@ -998,6 +1016,17 @@ export function LabArchitectStudio() {
         ]}
         actions={
           <div className="flex flex-wrap items-center gap-1.5">
+            <Button
+              size="sm"
+              variant="sky"
+              disabled={busyAction !== null}
+              onClick={() => void handleSyncLiveFleet()}
+              className="cursor-pointer"
+              title="Probe registered Pis/robots over SSH for attached USB devices (micro:bit, webcams, LiDAR) and sync into Lab Architect"
+            >
+              {busyAction === "sync_fleet" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Sync Live Fleet &amp; USB
+            </Button>
             <Button
               size="sm"
               variant="secondary"

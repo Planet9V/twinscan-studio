@@ -593,6 +593,20 @@ export async function seedLabInventory(): Promise<{ seeded: number; items: Inven
   };
 }
 
+export async function syncFleetHardwareToInventory(probeLive = true): Promise<{
+  ok: boolean;
+  synced_hosts: number;
+  synced_peripherals: number;
+  total_inventory_items: number;
+  details: Array<{ name: string; ip: string; probe_status: string; peripherals_found: string[] }>;
+}> {
+  return requestArchitectJson(
+    `/api/inventory/sync-fleet?probe_live=${probeLive ? "true" : "false"}`,
+    { method: "POST" },
+    1
+  );
+}
+
 // --- Human-AI Co-Design Architect ---
 
 export async function evaluateDesignIdea(payload: {

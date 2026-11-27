@@ -537,3 +537,72 @@ async def get_latest_multicam_twin_glb(
                 "download_url": f"/api/files/{fid}/download",
             }
     return {"found": False}
+
+
+class RemoteOverwatchSourceRequest(BaseModel):
+    """Register or update a remote HTTP MJPEG/snapshot camera feeding Overwatch."""
+
+    camera_id: str = Field(default=DEFAULT_CAMERA_ID, max_length=32)
+    stream_url: str = Field(..., min_length=8, max_length=512)
+    camera_name: Optional[str] = Field(default=None, max_length=96)
+    fps: float = Field(default=15.0, ge=0.5, le=60.0)
+    enabled: bool = Field(default=True)
+
+
+def _get_remote_puller(request: Request):
+    from src.vision.remote_camera_puller import RemoteOverwatchPullerManager
+
+    puller = getattr(request.app.state, "remote_overwatch_puller", None)
+    if puller is None:
+        puller = RemoteOverwatchPullerManager()
+        request.app.state.remote_overwatch_puller = puller
+    return puller
+
+
+@router.get("/remote-sources")
+async def list_remote_overwatch_sources(request: Request) -> Dict[str, Any]:
+    """List all persisted remote Pi/IP Overwatch camera pullers and their live stats."""
+    puller = _get_remote_puller(request)
+    sources = puller.list_sources()
+    return {"sources": sources, "count": len(sources)}
+
+
+@router.post("/remote-sources")
+async def upsert_remote_overwatch_source(
+    request: Request,
+    payload: RemoteOverwatchSourceRequest,
+) -> Dict[str, Any]:
+    """Register or update a remote HTTP MJPEG/snapshot camera and start pulling it into Overwatch."""
+    puller = _get_remote_puller(request)
+    mgr = _get_overwatch_manager(request)
+    puller.bind_runtime(
+        overwatch_manager=mgr,
+        ai_vision_engine=getattr(request.app.state, "ai_vision_engine", None),
+        ai_store=getattr(request.app.state, "robot_ai_store", None),
+        runtime=getattr(request.app.state, "runtime", None),
+    )
+    try:
+        source = await puller.upsert_source(
+            camera_id=payload.camera_id,
+            stream_url=payload.stream_url,
+            camera_name=payload.camera_name,
+            fps=payload.fps,
+            enabled=payload.enabled,
+        )
+        return {"ok": True, "source": source}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        sys.stderr.write(f"[overwatch.remote_sources] Registration failed: {exc}\n")
+        raise HTTPException(status_code=500, detail=f"Failed to register remote source: {exc}") from exc
+
+
+@router.delete("/remote-sources/{camera_id}")
+async def delete_remote_overwatch_source(request: Request, camera_id: str) -> Dict[str, Any]:
+    """Stop and remove a persisted remote Overwatch camera puller."""
+    puller = _get_remote_puller(request)
+    try:
+        removed = await puller.remove_source(camera_id)
+        return {"ok": True, "removed": removed, "camera_id": camera_id}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

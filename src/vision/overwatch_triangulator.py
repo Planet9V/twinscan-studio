@@ -89,6 +89,7 @@ class OverwatchCalibration:
     hfov_deg: float = 78.0
     vfov_deg: float = 48.0
     mode: str = "triangulate"
+    homography_3x3: Optional[List[List[float]]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize calibration parameters to a JSON-safe dictionary."""
@@ -101,6 +102,7 @@ class OverwatchCalibration:
             "hfov_deg": round(float(self.hfov_deg), 2),
             "vfov_deg": round(float(self.vfov_deg), 2),
             "mode": str(self.mode),
+            "has_homography": self.homography_3x3 is not None,
         }
 
 
@@ -322,6 +324,60 @@ class OverwatchCameraManager:
             self._aruco_detector = cv2.aruco.ArucoDetector(aruco_dict, cv2.aruco.DetectorParameters())
         except Exception:
             self._aruco_detector = None
+        from src.vision.overwatch_tracker import CrossViewTargetTracker
+
+        self._tracker = CrossViewTargetTracker()
+        self._repo: Any = None
+
+    def attach_repository(self, repo: Any) -> None:
+        """Attach a PostgreSQL/in-memory repository and restore persisted camera calibrations."""
+        self._repo = repo
+        if repo is None:
+            return
+        try:
+            import json as _json
+
+            raw = repo.get_settings_raw() or {}
+            blob = str(raw.get("overwatch_calibrations_json") or "").strip()
+            if not blob:
+                return
+            parsed = _json.loads(blob)
+            if not isinstance(parsed, dict):
+                return
+            with self._lock:
+                for cid, cfg in parsed.items():
+                    if not isinstance(cfg, dict):
+                        continue
+                    slot = self._get_or_create_slot(cid)
+                    cal = slot.calibration
+                    for fld in ("x_m", "y_m", "z_m", "yaw_deg", "pitch_deg", "hfov_deg", "vfov_deg"):
+                        if fld in cfg and cfg[fld] is not None:
+                            setattr(cal, fld, float(cfg[fld]))
+                    if cfg.get("mode") in VALID_OVERWATCH_MODES:
+                        cal.mode = str(cfg["mode"])
+                    h_mat = cfg.get("homography_3x3")
+                    if isinstance(h_mat, list) and len(h_mat) == 3:
+                        cal.homography_3x3 = h_mat
+        except Exception as exc:
+            sys.stderr.write(f"[overwatch.persist] Failed to load calibrations from DB: {exc}\n")
+
+    def _persist_calibrations(self) -> None:
+        """Persist all camera calibrations and 4-point homographies to PostgreSQL ``app_settings``."""
+        if self._repo is None:
+            return
+        try:
+            import json as _json
+
+            with self._lock:
+                payload: Dict[str, Any] = {}
+                for cid, slot in self._slots.items():
+                    d = slot.calibration.to_dict()
+                    if slot.calibration.homography_3x3 is not None:
+                        d["homography_3x3"] = slot.calibration.homography_3x3
+                    payload[cid] = d
+            self._repo.upsert_settings({"overwatch_calibrations_json": _json.dumps(payload)}, source_ip="overwatch")
+        except Exception as exc:
+            sys.stderr.write(f"[overwatch.persist] Failed to save calibrations to DB: {exc}\n")
 
     @property
     def calibration(self) -> OverwatchCalibration:
@@ -405,20 +461,20 @@ class OverwatchCameraManager:
         )
         cv2.putText(
             canvas,
-            "Start host bridge: python -m src.bridge.mac_camera_bridge",
+            "Click 'Enable Local Cameras' in /overwatch (Zero CLI required)",
             (28, 190),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.52,
+            0.50,
             (180, 195, 215),
             1,
             cv2.LINE_AA,
         )
         cv2.putText(
             canvas,
-            "Streams 4K USB Webcam + Built-in MacBook Pro Camera",
+            "Or run auto-start background service for 4K USB + MacBook Cam",
             (28, 225),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.48,
+            0.46,
             (130, 150, 175),
             1,
             cv2.LINE_AA,
@@ -554,11 +610,15 @@ class OverwatchCameraManager:
             else:
                 raw_dets.extend(self._detect_local_apriltags(frame_bgr))
 
+        from src.vision.overwatch_tracker import compute_hsv_descriptor
+
         # Project each detection into 3D world coordinates & attempt dual-ray triangulation
         detections_out: List[Dict[str, Any]] = []
         triangulated_out: List[Dict[str, Any]] = []
+        tracker_obs: List[Dict[str, Any]] = []
         rays_for_slot: Dict[str, Tuple[np.ndarray, np.ndarray, float]] = {}
         puppy_pose_est: Optional[Dict[str, Any]] = None
+        ang_sigma_rad = max(0.004, math.radians(float(cal.hfov_deg)) / max(160.0, float(w) * 0.25))
 
         robot_pose = getattr(runtime, "robot_pose", None) if runtime is not None else None
         lidar_points = getattr(runtime, "latest_points", None) if runtime is not None else None
@@ -598,6 +658,19 @@ class OverwatchCameraManager:
                 "y": ground_hit["y"] if ground_hit else None,
             }
             detections_out.append(det_record)
+            tracker_obs.append(
+                {
+                    "label": label,
+                    "kind": kind,
+                    "confidence": conf,
+                    "origin": origin1,
+                    "direction": dir1,
+                    "angular_sigma_rad": ang_sigma_rad,
+                    "ground_xy": (ground_hit["x"], ground_hit["y"]) if ground_hit else None,
+                    "bbox_norm": det_record["bbox_norm"],
+                    "hsv_desc": compute_hsv_descriptor(frame_bgr, det_record["bbox_norm"]),
+                }
+            )
 
             # 1) Try cross-camera dual-ray triangulation with another online overwatch camera
             tri_record: Optional[Dict[str, Any]] = None
@@ -686,6 +759,11 @@ class OverwatchCameraManager:
             slot.rays_by_label = rays_for_slot
             if puppy_pose_est is not None:
                 slot.puppy_visual_pose = puppy_pose_est
+            global_tracks = self._tracker.update_camera_observations(
+                camera_id=slot.camera_id,
+                observations=tracker_obs,
+                now_mono=now_mono,
+            )
 
         return {
             "ok": True,
@@ -695,6 +773,7 @@ class OverwatchCameraManager:
             "height": h,
             "detections_count": len(detections_out),
             "triangulated_count": len(triangulated_out),
+            "global_tracks_count": len(global_tracks),
         }
 
     def get_status(self, camera_id: Optional[str] = None) -> Dict[str, Any]:
@@ -782,6 +861,7 @@ class OverwatchCameraManager:
                 if fld in updates and updates[fld] is not None:
                     val = float(updates[fld])
                     setattr(cal, fld, max(lo, min(hi, val)))
+        self._persist_calibrations()
         return self.get_status(camera_id=slot.camera_id)
 
     def get_snapshot_bytes(self, annotated: bool = True, camera_id: Optional[str] = None) -> bytes:
@@ -798,3 +878,199 @@ class OverwatchCameraManager:
             cid = slot.camera_id
             cname = slot.camera_name
         return self._render_offline_jpeg(cid, cname)
+
+    def get_raw_frame_jpeg(self, camera_id: Optional[str] = None) -> bytes:
+        """Return the raw unannotated JPEG buffer for ``camera_id`` (or standby JPEG)."""
+        return self.get_snapshot_bytes(annotated=False, camera_id=camera_id)
+
+    def get_geometry_snapshot(
+        self,
+        runtime: Any = None,
+        room_bounds: Optional[Tuple[float, float, float, float]] = None,
+        max_range_m: float = 6.0,
+    ) -> Dict[str, Any]:
+        """Return frustum polygons, 0/1/2/3+ overlap zones, Placement Advisor, and global tracks.
+
+        Args:
+            runtime: Optional ``TwinScanRuntimeState`` to include mobile ``puppypi_fpv`` frustum.
+            room_bounds: Optional ``(min_x, min_y, max_x, max_y)`` arena bounds in meters.
+            max_range_m: Maximum frustum reach in meters.
+
+        Returns:
+            Full tactical BEV geometry dictionary for ``/overwatch`` and ``Lidar2DCanvas``.
+        """
+        from src.vision.overwatch_geometry import compute_coverage_overlap_zones
+
+        now_mono = time.monotonic()
+        with self._lock:
+            cams: List[Dict[str, Any]] = []
+            for cid, s in self._slots.items():
+                age = (now_mono - s.last_frame_mono) if s.last_frame_mono > 0 else None
+                online = bool(age is not None and age <= _ONLINE_TTL_SEC)
+                cams.append(
+                    {
+                        "camera_id": cid,
+                        "camera_name": s.camera_name,
+                        "online": online,
+                        "width": s.width or 1280,
+                        "height": s.height or 720,
+                        "calibration": s.calibration,
+                    }
+                )
+            tracks = self._tracker.list_tracks(now_mono=now_mono)
+
+        # Include PuppyPi mobile FPV camera frustum when live pose is available
+        robot_pose = getattr(runtime, "robot_pose", None) if runtime is not None else None
+        if isinstance(robot_pose, dict):
+            rx = float(robot_pose.get("x") or 0.0)
+            ry = float(robot_pose.get("y") or 0.0)
+            ryaw = float(robot_pose.get("yaw_deg") or 0.0)
+            cams.append(
+                {
+                    "camera_id": "puppypi_fpv",
+                    "camera_name": "PuppyPi Mobile FPV",
+                    "online": bool(robot_pose.get("live", False)),
+                    "width": 640,
+                    "height": 480,
+                    "calibration": OverwatchCalibration(
+                        x_m=rx,
+                        y_m=ry,
+                        z_m=0.22,
+                        yaw_deg=ryaw,
+                        pitch_deg=-10.0,
+                        hfov_deg=62.0,
+                        vfov_deg=46.0,
+                        mode="triangulate",
+                    ),
+                }
+            )
+
+        geo = compute_coverage_overlap_zones(cams, room_bounds=room_bounds, max_range_m=max_range_m)
+        geo["tracks"] = tracks
+        return geo
+
+    def calibrate_apriltag(
+        self,
+        camera_id: Optional[str] = None,
+        tag_size_m: float = 0.12,
+        tag_world_xyz: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        tag_world_yaw_deg: float = 0.0,
+        target_tag_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Auto-calibrate one or all active cameras using a visible AprilTag (``solvePnP``)."""
+        from src.vision.overwatch_geometry import calibrate_camera_apriltag_pnp
+
+        now_mono = time.monotonic()
+        target_ids: List[str]
+        with self._lock:
+            if camera_id and str(camera_id).strip().lower() == "all":
+                target_ids = [
+                    cid
+                    for cid, s in self._slots.items()
+                    if s.raw_jpeg is not None and (now_mono - s.last_frame_mono) <= _ONLINE_TTL_SEC
+                ]
+                if not target_ids:
+                    target_ids = list(self._slots.keys())
+            else:
+                target_ids = [sanitize_camera_id(camera_id)]
+
+        results: Dict[str, Any] = {}
+        calibrated_any = False
+        for cid in target_ids:
+            with self._lock:
+                slot = self._get_or_create_slot(cid)
+                raw = slot.raw_jpeg
+                cal = slot.calibration
+            if not raw:
+                results[cid] = {"ok": False, "error": f"No live frame buffered for {cid}."}
+                continue
+            arr = np.frombuffer(raw, dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            try:
+                solved = calibrate_camera_apriltag_pnp(
+                    frame_bgr=frame,
+                    cal=cal,
+                    tag_size_m=tag_size_m,
+                    tag_world_xyz=tag_world_xyz,
+                    tag_world_yaw_deg=tag_world_yaw_deg,
+                    target_tag_id=target_tag_id,
+                )
+                self.update_calibration(solved["calibration"], camera_id=cid)
+                results[cid] = solved
+                calibrated_any = True
+            except Exception as exc:
+                results[cid] = {"ok": False, "error": str(exc)}
+
+        return {
+            "ok": calibrated_any,
+            "results": results,
+            "geometry": self.get_geometry_snapshot(),
+        }
+
+    def calibrate_homography(
+        self,
+        camera_id: Optional[str],
+        pixel_points_norm: Sequence[Sequence[float]],
+        world_points_xy: Sequence[Sequence[float]],
+    ) -> Dict[str, Any]:
+        """Calibrate a camera from 4+ clicked floor points via ``findHomography`` + ``solvePnP``."""
+        from src.vision.overwatch_geometry import calibrate_camera_four_point_homography
+
+        cid = sanitize_camera_id(camera_id)
+        with self._lock:
+            slot = self._get_or_create_slot(cid)
+            w = slot.width or 1280
+            h = slot.height or 720
+            cal = slot.calibration
+
+        solved = calibrate_camera_four_point_homography(
+            pixel_points_norm=pixel_points_norm,
+            world_points_xy=world_points_xy,
+            width=w,
+            height=h,
+            cal=cal,
+        )
+        self.update_calibration(solved["calibration"], camera_id=cid)
+        with self._lock:
+            slot = self._get_or_create_slot(cid)
+            slot.calibration.homography_3x3 = solved["homography_3x3"]
+        self._persist_calibrations()
+        return {
+            "ok": True,
+            "camera_id": cid,
+            **solved,
+            "status": self.get_status(camera_id=cid),
+            "geometry": self.get_geometry_snapshot(),
+        }
+
+    def project_task_point(
+        self,
+        camera_id: Optional[str],
+        u_norm: float,
+        v_norm: float,
+        runtime: Any = None,
+        standoff_m: float = 0.30,
+    ) -> Dict[str, Any]:
+        """Project a clicked pixel on ``camera_id`` to a floor target & safe PuppyPi waypoint."""
+        from src.vision.overwatch_geometry import project_pixel_to_task_waypoint
+
+        cid = sanitize_camera_id(camera_id)
+        with self._lock:
+            slot = self._get_or_create_slot(cid)
+            w = slot.width or 1280
+            h = slot.height or 720
+            cal = slot.calibration
+            H = cal.homography_3x3
+
+        robot_pose = getattr(runtime, "robot_pose", None) if runtime is not None else None
+        proj = project_pixel_to_task_waypoint(
+            u_norm=u_norm,
+            v_norm=v_norm,
+            cal=cal,
+            width=w,
+            height=h,
+            homography_3x3=H,
+            robot_pose=robot_pose if isinstance(robot_pose, dict) else None,
+            standoff_m=standoff_m,
+        )
+        return {"ok": True, "camera_id": cid, **proj}

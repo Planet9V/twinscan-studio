@@ -24,7 +24,20 @@ import numpy as np
 import websockets
 
 from src.robot.ros_profiles import get_ros_profile
-from src.robot.rosbridge_proxy import clamp_velocity, fetch_robot_snapshot, publish_velocity
+from src.robot.rosbridge_proxy import (
+    clamp_velocity,
+    fetch_robot_snapshot,
+    publish_gait,
+    publish_pose,
+    publish_velocity,
+)
+from src.robot.stability_guard import (
+    DEFAULT_STABILITY_PRESET,
+    VelocitySlewLimiter,
+    VisualSlipDetector,
+    evaluate_imu_tilt_guard,
+    get_stability_preset,
+)
 
 NULL_SECTORS: Dict[str, Optional[float]] = {
     "front": None,
@@ -377,11 +390,17 @@ class RobotPatrolManager:
         get_lidar_points: Optional[Callable[[], Sequence[Any]]] = None,
         get_visual_obstacle: Optional[Callable[[], Optional[str]]] = None,
         announce_fn: Optional[Callable[[str], Coroutine[Any, Any, None]]] = None,
+        stability_preset: str = DEFAULT_STABILITY_PRESET,
+        get_imu_attitude: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
+        get_overwatch_pose: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
+        on_waypoint_capture: Optional[Callable[[int], Coroutine[Any, Any, None]]] = None,
     ) -> Dict[str, Any]:
-        """Start an autonomous multi-waypoint patrol loop with strict real-robot ``/scan`` fail-safe."""
+        """Start an autonomous multi-waypoint patrol loop with strict real-robot ``/scan`` & tilt fail-safes."""
         if not waypoints:
             raise ValueError("At least one patrol waypoint is required.")
         await self.stop(robot_id, ip=ip, rosbridge_port=rosbridge_port, ros_version=ros_version)
+        preset_cfg = get_stability_preset(stability_preset)
+        max_speed_cms = min(float(max_speed_cms), preset_cfg.max_vx_cms)
 
         wps = list(waypoints)
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -466,6 +485,7 @@ class RobotPatrolManager:
             "active": True,
             "state": "starting",
             "route_name": route_name,
+            "stability_preset": preset_cfg.name,
             "current_waypoint_idx": 0,
             "total_waypoints": len(wps),
             "loop_enabled": bool(loop_enabled),
@@ -490,6 +510,44 @@ class RobotPatrolManager:
             last_cam_check = 0.0
             active_cam_obs: Optional[str] = None
             active_cam_turn: Optional[str] = None
+            slew = VelocitySlewLimiter(preset_cfg)
+            slip_detector = VisualSlipDetector()
+
+            # Auto-initialize low-CG stable stance & carpet-safe gait without blocking tick-0 safety checks
+            async def _apply_stable_gait() -> None:
+                try:
+                    await asyncio.wait_for(
+                        publish_pose(
+                            ip,
+                            rosbridge_port,
+                            roll=0.0,
+                            pitch=0.0,
+                            yaw=0.0,
+                            height=preset_cfg.height_cm,
+                            x_shift=preset_cfg.x_shift_cm,
+                            run_time=500,
+                            ros_version=ros_version,
+                            robot_id=robot_id,
+                        ),
+                        timeout=1.5,
+                    )
+                    await asyncio.wait_for(
+                        publish_gait(
+                            ip,
+                            rosbridge_port,
+                            overlap_time=preset_cfg.overlap_time_s,
+                            swing_time=preset_cfg.swing_time_s,
+                            clearance_time=preset_cfg.clearance_time_s,
+                            z_clearance=preset_cfg.z_clearance_cm,
+                            ros_version=ros_version,
+                            robot_id=robot_id,
+                        ),
+                        timeout=1.5,
+                    )
+                except Exception as exc:
+                    sys.stderr.write(f"[patrol.stability] Stance/gait init skipped for {robot_id}: {exc}\n")
+
+            asyncio.create_task(_apply_stable_gait())
 
             if announce_fn:
                 try:
@@ -581,13 +639,62 @@ class RobotPatrolManager:
                     desired_heading = math.atan2(dy, dx) - pose_yaw
                     desired_heading = (desired_heading + math.pi) % (2.0 * math.pi) - math.pi
 
+                    # IMU Tilt-Guard: halt & crouch immediately if roll or pitch exceeds safe limit
+                    if get_imu_attitude is not None:
+                        try:
+                            att = get_imu_attitude() or {}
+                            guard = evaluate_imu_tilt_guard(
+                                att.get("roll_deg"),
+                                att.get("pitch_deg"),
+                                max_tilt_deg=preset_cfg.max_tilt_deg,
+                            )
+                            if not guard["safe"]:
+                                slew.reset()
+                                await publish_velocity(
+                                    ip, rosbridge_port, 0.0, 0.0, 0.0, ros_version=ros_version, robot_id=robot_id
+                                )
+                                await publish_pose(
+                                    ip,
+                                    rosbridge_port,
+                                    height=-7.5,
+                                    x_shift=preset_cfg.x_shift_cm,
+                                    run_time=400,
+                                    ros_version=ros_version,
+                                    robot_id=robot_id,
+                                )
+                                self._status[robot_id].update(
+                                    {
+                                        "active": False,
+                                        "state": "tilt_guard_paused",
+                                        "last_command": {"vx_cms": 0.0, "yaw_rate_rads": 0.0},
+                                        "error": guard["reason"],
+                                    }
+                                )
+                                return
+                        except Exception as exc:
+                            sys.stderr.write(f"[patrol.tilt_guard] Check warning: {exc}\n")
+
+                    # Blend overhead Overwatch visual pose (25%) to cancel odometry drift
+                    vis_pose = get_overwatch_pose() if get_overwatch_pose is not None else None
+                    if isinstance(vis_pose, dict) and vis_pose.get("seen"):
+                        pose_x = 0.75 * pose_x + 0.25 * float(vis_pose.get("x", pose_x))
+                        pose_y = 0.75 * pose_y + 0.25 * float(vis_pose.get("y", pose_y))
+
                     if dist < 0.25:
                         pause_s = float(wp.get("pause_sec", 0.5))
+                        slew.reset()
+                        slip_detector.reset()
                         self._status[robot_id]["state"] = f"reached_wp_{wp_idx + 1}"
                         await publish_velocity(
                             ip, rosbridge_port, 0.0, 0.0, 0.0, ros_version=ros_version, robot_id=robot_id
                         )
-                        await asyncio.sleep(min(3.0, max(0.2, pause_s)))
+                        await asyncio.sleep(min(3.0, max(0.6, pause_s)))
+                        if on_waypoint_capture is not None:
+                            try:
+                                self._status[robot_id]["state"] = f"capturing_3d_wp_{wp_idx + 1}"
+                                await on_waypoint_capture(wp_idx)
+                            except Exception as exc:
+                                sys.stderr.write(f"[patrol.capture] Waypoint 3D capture error: {exc}\n")
                         wp_idx += 1
                         if wp_idx >= len(wps):
                             if loop_enabled:
@@ -622,17 +729,35 @@ class RobotPatrolManager:
                         reported_sectors = dict(NULL_SECTORS)
                         if vis_obs:
                             vx = 0.0
-                            yaw_rate = 0.48 if active_cam_turn != "right" else -0.48
+                            yaw_rate = preset_cfg.max_yaw_rads if active_cam_turn != "right" else -preset_cfg.max_yaw_rads
                             nav_state = "avoiding_visual_obstacle"
                         else:
-                            safe_cam_speed = max(4.0, min(10.0, float(max_speed_cms)))
-                            yaw = max(-0.55, min(0.55, desired_heading * 0.8))
+                            safe_cam_speed = max(4.0, min(preset_cfg.max_vx_cms, float(max_speed_cms)))
+                            yaw = max(-preset_cfg.max_yaw_rads, min(preset_cfg.max_yaw_rads, desired_heading * 0.6))
                             clamped = clamp_velocity(safe_cam_speed * max(0.35, 1.0 - abs(yaw) * 0.8), 0.0, yaw)
                             vx, yaw_rate = clamped["x"], clamped["yaw_rate"]
                             nav_state = "navigating_camera_only"
 
                     dt = min(0.5, max(0.05, now - last_t))
                     last_t = now
+                    vx, yaw_rate = slew.step(vx, yaw_rate, dt)
+
+                    # Overwatch Visual Slip Spotter: pause safely if stuck on carpet/cord
+                    slip = slip_detector.update(vx, vis_pose, now_mono=now)
+                    if slip["stalled"]:
+                        slew.reset()
+                        await publish_velocity(
+                            ip, rosbridge_port, 0.0, 0.0, 0.0, ros_version=ros_version, robot_id=robot_id
+                        )
+                        self._status[robot_id].update(
+                            {
+                                "active": False,
+                                "state": "slip_stall_paused",
+                                "last_command": {"vx_cms": 0.0, "yaw_rate_rads": 0.0},
+                                "error": slip["reason"],
+                            }
+                        )
+                        return
                     pose_yaw += yaw_rate * dt
                     pose_x += (vx / 100.0) * math.cos(pose_yaw) * dt
                     pose_y += (vx / 100.0) * math.sin(pose_yaw) * dt

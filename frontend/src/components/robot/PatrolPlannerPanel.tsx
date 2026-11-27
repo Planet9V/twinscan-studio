@@ -46,6 +46,7 @@ import {
   type PatrolWaypoint,
 } from "@/lib/aiVisionApi";
 import { getRobotVideoStreamUrl, type RobotRecord } from "@/lib/robotApi";
+import { suggestBlindSpotMappingRoute } from "@/lib/overwatchApi";
 
 interface PatrolPlannerPanelProps {
   robot: RobotRecord | null;
@@ -135,7 +136,9 @@ export function PatrolPlannerPanel({ robot }: PatrolPlannerPanelProps) {
   ]);
   const [routeName, setRouteName] = useState("Lab Perimeter Patrol");
   const [loopEnabled, setLoopEnabled] = useState(true);
-  const [maxSpeedCms, setMaxSpeedCms] = useState(12);
+  const [maxSpeedCms, setMaxSpeedCms] = useState(7);
+  const [stabilityPreset, setStabilityPreset] = useState<"carpet_lidar" | "hardwood_lidar" | "ultra_safe">("carpet_lidar");
+  const [capture3dAtWaypoints, setCapture3dAtWaypoints] = useState(true);
   const [obstacleClearanceM, setObstacleClearanceM] = useState(0.4);
   const [announceVoice, setAnnounceVoice] = useState(true);
   const [requireLidar, setRequireLidar] = useState(true);
@@ -310,6 +313,8 @@ export function PatrolPlannerPanel({ robot }: PatrolPlannerPanelProps) {
         announce_voice: announceVoice,
         require_lidar: requireLidar,
         camera_avoidance: cameraAvoidance,
+        stability_preset: stabilityPreset,
+        capture_3d_at_waypoints: capture3dAtWaypoints,
       });
       setPatrolStatus(st);
       if (st.state === "blocked_no_lidar") {
@@ -551,6 +556,52 @@ export function PatrolPlannerPanel({ robot }: PatrolPlannerPanelProps) {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <select
+              value={stabilityPreset}
+              onChange={(e) => {
+                const next = e.target.value as "carpet_lidar" | "hardwood_lidar" | "ultra_safe";
+                setStabilityPreset(next);
+                setMaxSpeedCms(next === "ultra_safe" ? 5 : next === "carpet_lidar" ? 7 : 9);
+              }}
+              className="h-8 rounded-md border border-white/15 bg-slate-950 px-2 font-mono text-[11px] text-cyan-200"
+              aria-label="Stability surface preset"
+            >
+              <option value="carpet_lidar">Carpet + LiDAR Safe</option>
+              <option value="hardwood_lidar">Hardwood + LiDAR</option>
+              <option value="ultra_safe">Ultra-Safe Slow</option>
+            </select>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busyAction !== null}
+              onClick={() => {
+                setBusyAction("plan");
+                void suggestBlindSpotMappingRoute(4, 1.8)
+                  .then((res) => {
+                    setWaypoints(res.waypoints.map((w) => ({ x: w.x, y: w.y, pause_sec: w.pause_sec })));
+                    setBanner({ kind: "ok", text: res.summary });
+                  })
+                  .catch((err) =>
+                    setBanner({
+                      kind: "error",
+                      text: err instanceof Error ? err.message : "Failed to suggest blind-spot route.",
+                    })
+                  )
+                  .finally(() => setBusyAction(null));
+              }}
+              className="cursor-pointer"
+            >
+              <Compass className="h-3.5 w-3.5 text-cyan-400" />
+              Auto-Plan Blind-Spot Route
+            </Button>
+            <Button
+              size="sm"
+              variant={capture3dAtWaypoints ? "sky" : "outline"}
+              onClick={() => setCapture3dAtWaypoints((v) => !v)}
+              className="cursor-pointer text-[11px]"
+            >
+              3D Capture: {capture3dAtWaypoints ? "ON" : "OFF"}
+            </Button>
             <Badge variant={patrolStatus?.active ? "default" : "neutral"}>
               {patrolStatus?.active ? "PATROL ACTIVE" : "STANDBY"}
             </Badge>

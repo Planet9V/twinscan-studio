@@ -4,7 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Crosshair, Eye, Maximize2, Ruler, ZoomIn, ZoomOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import type { OverwatchStatus } from "@/lib/overwatchApi";
+import type { OverwatchGeometry, OverwatchStatus } from "@/lib/overwatchApi";
 import type { EquipmentAsset, FocusTarget, LidarFrame, ObjectCluster, SpatialDarkZone } from "@/lib/types";
 
 interface Lidar2DCanvasProps {
@@ -15,6 +15,10 @@ interface Lidar2DCanvasProps {
   pendingPin: { x: number; y: number } | null;
   focusTarget: FocusTarget | null;
   overwatchStatus?: OverwatchStatus | null;
+  overwatchGeometry?: OverwatchGeometry | null;
+  showFrustums?: boolean;
+  showOverlapHeatmap?: boolean;
+  showGdopEllipses?: boolean;
   onSelectEquipment: (id: string) => void;
   onMapClick: (x: number, y: number, cluster?: ObjectCluster) => void;
 }
@@ -27,6 +31,10 @@ export function Lidar2DCanvas({
   pendingPin,
   focusTarget,
   overwatchStatus = null,
+  overwatchGeometry = null,
+  showFrustums = true,
+  showOverlapHeatmap = true,
+  showGdopEllipses = true,
   onSelectEquipment,
   onMapClick,
 }: Lidar2DCanvasProps) {
@@ -504,6 +512,97 @@ export function Lidar2DCanvas({
       }
     }
 
+    // Tactical Multi-Camera Overwatch Geometry (0/1/2/3+ Overlap Heatmap, Frustums, Sightlines & 2-Sigma GDOP Ellipses)
+    if (overwatchGeometry) {
+      const drawRings = (rings: number[][][], fill: string, stroke?: string) => {
+        for (const ring of rings) {
+          if (ring.length < 3) continue;
+          ctx.beginPath();
+          ring.forEach(([px, py], i) => {
+            if (i === 0) ctx.moveTo(toSx(px), toSy(py));
+            else ctx.lineTo(toSx(px), toSy(py));
+          });
+          ctx.closePath();
+          ctx.fillStyle = fill;
+          ctx.fill();
+          if (stroke) {
+            ctx.strokeStyle = stroke;
+            ctx.lineWidth = 1.1;
+            ctx.stroke();
+          }
+        }
+      };
+
+      if (showOverlapHeatmap && overwatchGeometry.zones) {
+        drawRings(overwatchGeometry.zones.dead_0?.polygons ?? [], "rgba(239, 68, 68, 0.08)");
+        drawRings(overwatchGeometry.zones.mono_1?.polygons ?? [], "rgba(245, 158, 11, 0.13)");
+        drawRings(overwatchGeometry.zones.stereo_2?.polygons ?? [], "rgba(16, 185, 129, 0.20)", "rgba(16, 185, 129, 0.45)");
+        drawRings(overwatchGeometry.zones.fusion_3plus?.polygons ?? [], "rgba(34, 211, 238, 0.28)", "rgba(34, 211, 238, 0.7)");
+      }
+
+      if (showFrustums && Array.isArray(overwatchGeometry.frustums)) {
+        for (const fr of overwatchGeometry.frustums) {
+          ctx.save();
+          ctx.setLineDash([4, 4]);
+          drawRings(fr.polygons ?? [], "rgba(56, 189, 248, 0.03)", fr.color || "#38bdf8");
+          ctx.setLineDash([]);
+          const [ox, oy] = fr.origin_xy;
+          const sx = toSx(ox);
+          const sy = toSy(oy);
+          ctx.fillStyle = fr.color || "#38bdf8";
+          ctx.beginPath();
+          ctx.arc(sx, sy, 4.5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.font = "bold 9px 'JetBrains Mono', monospace";
+          ctx.fillText(fr.camera_id.toUpperCase(), sx + 7, sy + 3);
+          ctx.restore();
+        }
+      }
+
+      if (Array.isArray(overwatchGeometry.tracks)) {
+        for (const trk of overwatchGeometry.tracks) {
+          const tx = toSx(trk.x);
+          const ty = toSy(trk.y);
+
+          // Dashed triangulation sightlines
+          ctx.save();
+          ctx.setLineDash([3, 3]);
+          ctx.strokeStyle = "rgba(34, 211, 238, 0.55)";
+          ctx.lineWidth = 1.1;
+          for (const sl of trk.sightlines ?? []) {
+            ctx.beginPath();
+            ctx.moveTo(toSx(sl.from_xy[0]), toSy(sl.from_xy[1]));
+            ctx.lineTo(toSx(sl.to_xy[0]), toSy(sl.to_xy[1]));
+            ctx.stroke();
+          }
+          ctx.setLineDash([]);
+
+          // 2-sigma GDOP Uncertainty Ellipse
+          if (showGdopEllipses && trk.ellipse_2sigma) {
+            const rxPx = Math.max(4, trk.ellipse_2sigma.semi_major_m * scalePxPerM);
+            const ryPx = Math.max(4, trk.ellipse_2sigma.semi_minor_m * scalePxPerM);
+            const rotRad = -(trk.ellipse_2sigma.angle_deg * Math.PI) / 180;
+            ctx.beginPath();
+            ctx.ellipse(tx, ty, rxPx, ryPx, rotRad, 0, Math.PI * 2);
+            ctx.fillStyle = "rgba(34, 211, 238, 0.14)";
+            ctx.fill();
+            ctx.strokeStyle = trk.gdop <= 2.6 ? "#22d3ee" : "#f59e0b";
+            ctx.lineWidth = 1.4;
+            ctx.stroke();
+          }
+
+          ctx.fillStyle = "#22d3ee";
+          ctx.beginPath();
+          ctx.arc(tx, ty, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.font = "bold 9px 'JetBrains Mono', monospace";
+          ctx.fillStyle = "#e0f2fe";
+          ctx.fillText(`${trk.track_id} ${trk.label} (GDOP ${trk.gdop})`, tx + 8, ty - 6);
+          ctx.restore();
+        }
+      }
+    }
+
     // Crisp FRONT / BACK / LEFT / RIGHT edge compass labels (+ live cardinal distances if present)
     const card = frame?.cardinal_m;
     const fmtCard = (val?: number | null) =>
@@ -526,7 +625,24 @@ export function Lidar2DCanvas({
     drawEdgeBadge(`RIGHT →${fmtCard(card?.right)}`, width - 58, height / 2, "#38bdf8");
 
     ctx.restore();
-  }, [frame, equipment, darkZones, selectedEquipmentId, pendingPin, focusTarget, overwatchStatus, scalePxPerM, pan, colorMode, showDarkZones, rulerPts]);
+  }, [
+    frame,
+    equipment,
+    darkZones,
+    selectedEquipmentId,
+    pendingPin,
+    focusTarget,
+    overwatchStatus,
+    overwatchGeometry,
+    showFrustums,
+    showOverlapHeatmap,
+    showGdopEllipses,
+    scalePxPerM,
+    pan,
+    colorMode,
+    showDarkZones,
+    rulerPts,
+  ]);
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const pt = screenToWorld(e.clientX, e.clientY);

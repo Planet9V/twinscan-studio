@@ -87,31 +87,62 @@ def detect_available_cameras(max_index: int = 4) -> List[Dict[str, Any]]:
     if not found_indices:
         return []
 
+    # On macOS, OpenCV AVFoundation indices do NOT always match system_profiler order:
+    # probe each camera's native max width (4K USB supports >= 2560px or MJPG 3840x2160,
+    # whereas built-in MacBook Pro Camera caps at 1920x1080).
+    probed: List[Dict[str, Any]] = []
+    for idx in found_indices:
+        max_w = 0
+        cap = None
+        try:
+            cap = cv2.VideoCapture(idx, backend)
+            if cap is not None and cap.isOpened():
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, 3840)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 2160)
+                max_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        except Exception:
+            max_w = 0
+        finally:
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:
+                    pass
+        probed.append({"index": idx, "max_w": max_w})
+
     cameras: List[Dict[str, Any]] = []
     used_ids: set[str] = set()
-    for pos, idx in enumerate(found_indices):
-        raw_name = mac_names[pos] if pos < len(mac_names) else ""
-        low = raw_name.lower()
-        if "macbook" in low or "facetime" in low or "built-in" in low:
-            cid = "macbook_cam" if "macbook_cam" not in used_ids else f"cam_{idx}"
-            cname = raw_name or "MacBook Pro Camera"
-        elif "4k" in low or "usb" in low or "webcam" in low or "logitech" in low or "brio" in low:
-            cid = "usb_4k" if "usb_4k" not in used_ids else f"cam_{idx}"
-            cname = raw_name or "4k Webcam"
-        elif len(found_indices) >= 2:
-            # Standard macOS ordering: index 0 or 1 splits built-in vs external USB 4K
-            if idx == 1 and "usb_4k" not in used_ids:
-                cid, cname = "usb_4k", raw_name or "4k Webcam"
-            elif idx == 0 and "macbook_cam" not in used_ids:
-                cid, cname = "macbook_cam", raw_name or "MacBook Pro Camera"
-            else:
-                cid, cname = f"cam_{idx}", raw_name or f"USB Camera #{idx}"
+    # Identify the true 4K USB camera first (highest max_w >= 2560, else index 1 when >=2 cams)
+    usb_4k_idx: Optional[int] = None
+    if len(probed) >= 2:
+        by_res = sorted(probed, key=lambda p: (p["max_w"], p["index"]), reverse=True)
+        if by_res[0]["max_w"] > by_res[1]["max_w"] and by_res[0]["max_w"] >= 2000:
+            usb_4k_idx = int(by_res[0]["index"])
         else:
-            cid = "usb_4k" if "usb_4k" not in used_ids else f"cam_{idx}"
-            cname = raw_name or ("MacBook Pro Camera" if idx == 0 else "4k Webcam")
+            # On macOS AVFoundation, index 0 is normally built-in FaceTime/MacBook Pro Camera
+            usb_4k_idx = int(probed[1]["index"])
+
+    usb_name = next((n for n in mac_names if any(k in n.lower() for k in ("4k", "usb", "webcam", "logitech", "brio"))), "4k Webcam")
+    mac_name = next((n for n in mac_names if any(k in n.lower() for k in ("macbook", "facetime", "built-in"))), "MacBook Pro Camera")
+
+    for item in probed:
+        idx = int(item["index"])
+        if len(probed) >= 2:
+            if idx == usb_4k_idx and "usb_4k" not in used_ids:
+                cid, cname = "usb_4k", usb_name
+            elif "macbook_cam" not in used_ids:
+                cid, cname = "macbook_cam", mac_name
+            else:
+                cid, cname = f"cam_{idx}", f"USB Camera #{idx}"
+        else:
+            if item["max_w"] >= 2000:
+                cid, cname = "usb_4k", usb_name
+            else:
+                cid, cname = "macbook_cam", mac_name
 
         used_ids.add(cid)
-        cameras.append({"index": idx, "camera_id": cid, "camera_name": cname})
+        cameras.append({"index": idx, "camera_id": cid, "camera_name": cname, "max_width": item["max_w"]})
 
     # Prefer streaming usb_4k first in log output
     cameras.sort(key=lambda c: (0 if c["camera_id"] == "usb_4k" else 1 if c["camera_id"] == "macbook_cam" else 2))
@@ -185,6 +216,8 @@ def _camera_capture_loop(
         sys.stderr.write(f"[mac_camera_bridge:{camera_id}] Unable to open camera index {device_index}.\n")
         return
 
+    # Enable hardware MJPG so USB 2.0 4K webcams negotiate crisp 1080p/4K instead of blurry YUYV
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(width))
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(height))
     cap.set(cv2.CAP_PROP_FPS, float(fps))

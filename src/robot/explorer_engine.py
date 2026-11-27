@@ -419,8 +419,45 @@ class AutonomousExplorerManager:
         safe_iters = max(1, min(15, int(max_iterations)))
         safe_cov_target = max(40.0, min(99.0, float(target_coverage_pct)))
         safe_rth_v = max(6.6, min(7.8, float(rth_battery_v)))
-        safe_speed = max(5.0, min(20.0, float(max_speed_cms)))
+        from src.robot.stability_guard import DEFAULT_STABILITY_PRESET, get_stability_preset
+        from src.robot.rosbridge_proxy import publish_gait
+
+        preset_cfg = get_stability_preset(DEFAULT_STABILITY_PRESET)
+        safe_speed = max(5.0, min(preset_cfg.max_vx_cms, float(max_speed_cms)))
         safe_clear = max(0.3, min(1.2, float(obstacle_clearance_m)))
+
+        # Non-blocking low-CG carpet_lidar gait init for top-heavy Explorer safety
+        async def _apply_explorer_stable_gait() -> None:
+            try:
+                await asyncio.wait_for(
+                    publish_pose(
+                        ip=ip,
+                        port=rosbridge_port,
+                        height=preset_cfg.height_cm,
+                        x_shift=preset_cfg.x_shift_cm,
+                        run_time=450,
+                        ros_version=ros_version,
+                        robot_id=robot_id,
+                    ),
+                    timeout=1.5,
+                )
+                await asyncio.wait_for(
+                    publish_gait(
+                        ip=ip,
+                        port=rosbridge_port,
+                        overlap_time=preset_cfg.overlap_time_s,
+                        swing_time=preset_cfg.swing_time_s,
+                        clearance_time=preset_cfg.clearance_time_s,
+                        z_clearance=preset_cfg.z_clearance_cm,
+                        ros_version=ros_version,
+                        robot_id=robot_id,
+                    ),
+                    timeout=1.5,
+                )
+            except Exception as exc:
+                sys.stderr.write(f"[explorer.stability] Stance/gait init skipped for {robot_id}: {exc}\n")
+
+        asyncio.create_task(_apply_explorer_stable_gait())
 
         initial_pts = list(get_lidar_points() or []) if get_lidar_points else []
         lidar_live = len(initial_pts) > 0

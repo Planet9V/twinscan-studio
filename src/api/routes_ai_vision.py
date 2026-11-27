@@ -139,6 +139,8 @@ class StartPatrolRequest(BaseModel):
     announce_voice: bool = False
     require_lidar: bool = True
     camera_avoidance: bool = True
+    stability_preset: str = Field(default="carpet_lidar", max_length=32)
+    capture_3d_at_waypoints: bool = False
 
 
 # --- Helpers ---
@@ -696,6 +698,27 @@ async def start_robot_patrol(
             ros_version=normalize_ros_mode(robot.get("active_ros_distro")),
         )
 
+    ow_mgr = getattr(request.app.state, "overwatch_manager", None)
+
+    on_wp_capture = None
+    if body.capture_3d_at_waypoints and ow_mgr is not None:
+
+        async def _capture_wp_3d(_wp_idx: int) -> None:
+            from src.lidar.multicam_room_fuser import fuse_multicam_room_digital_twin
+
+            await asyncio.to_thread(
+                fuse_multicam_room_digital_twin,
+                overwatch_manager=ow_mgr,
+                runtime=rt,
+                repo=rt.repo,
+                space_id=rt.active_space_id,
+                puppypi_jpeg=None,
+                resolution="medium",
+                allow_model_download=True,
+            )
+
+        on_wp_capture = _capture_wp_3d
+
     return await patrol_mgr.start(
         robot_id=robot_id,
         ip=robot["ip_address"],
@@ -722,6 +745,10 @@ async def start_robot_patrol(
         ),
         get_visual_obstacle=lambda: ai_vision.get_visual_obstacle(robot_id),
         announce_fn=announce_fn,
+        stability_preset=body.stability_preset,
+        get_imu_attitude=lambda: getattr(rt, "robot_pose", None),
+        get_overwatch_pose=(lambda: ow_mgr.puppy_visual_pose) if ow_mgr is not None else None,
+        on_waypoint_capture=on_wp_capture,
     )
 
 

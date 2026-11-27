@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
   Camera,
   Check,
@@ -305,6 +306,13 @@ export function OverwatchHudCard({
           </div>
 
           <div className="flex flex-wrap items-center gap-1">
+            <Link
+              href="/overwatch"
+              className="inline-flex h-6 cursor-pointer items-center gap-1 rounded border border-cyan-500/40 bg-cyan-950/40 px-2 font-mono text-[10px] font-semibold text-cyan-300 transition hover:bg-cyan-900/50"
+            >
+              <Crosshair className="h-3 w-3" />
+              Full Cockpit →
+            </Link>
             {/* Compact 4K USB | MacBook Cam | Dual Selector */}
             {visible && (
               <div

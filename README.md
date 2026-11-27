@@ -10,7 +10,7 @@
 [![Three.js & Babylon.js](https://img.shields.io/badge/3D%20Engines-Three.js%20%2B%20Babylon.js-38BDF8?style=flat-square)](frontend/src/components/twin3d)
 [![PostgreSQL 18 + pgvector](https://img.shields.io/badge/PostgreSQL-18%20%2B%20pgvector-336791?style=flat-square&logo=postgresql&logoColor=white)](docker-compose.yml)
 [![Neo4j 5](https://img.shields.io/badge/Neo4j-5%20Graph-008CC1?style=flat-square&logo=neo4j&logoColor=white)](src/graph/neo4j_store.py)
-[![Tests](https://img.shields.io/badge/pytest-179%20passing-10B981?style=flat-square)](tests)
+[![Tests](https://img.shields.io/badge/pytest-199%20passing-10B981?style=flat-square)](tests)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)](LICENSE)
 
 [Quick Start](#quick-start-3-commands) · [Live Screenshots](#inside-the-studio) · [Flagship PuppyPi Pro Example](#flagship-example-hiwonder-puppypi-pro) · [Architecture](#system-architecture) · [Full Wiki (`docs/wiki/`)](docs/wiki/README.md) · [Early Bird Founders](#early-bird-maker-founders-50-spots)
@@ -44,13 +44,17 @@ Every capability below was built and tested against a real **Hiwonder PuppyPi Pr
 | **Live LD19 LiDAR Rate** | `5.0–6.9 Hz`, single-instance deduplicated (`0` timeouts) | `src/robot/ssh_manager.py` |
 | **Battery & RTH Telemetry** | Live 2S LiPo voltage (`8.30 V` / `95%`), auto-RTH at `7.10 V` | `src/robot/explorer_engine.py` |
 | **Cloud Dependency** | `0` required cloud accounts for video, voice, or LiDAR | `src/devices/local_camera_bridge.py` |
-| **Automated Verification** | `179` passing `pytest` tests (`0` warnings), `14` Next.js 16 routes | `tests/` + `frontend/` |
+| **Automated Verification** | `199` passing `pytest` tests (`0` warnings), `15` Next.js 16 routes | `tests/` + `frontend/` |
 
 ---
 
 ## Inside the Studio
 
-### 1. Real-Room 3D Reconstruction & Dual WebGL Digital Twins (`/twin`)
+### 1. Tactical Multi-Camera Overwatch & Unified BEV Sensor Fusion (`/overwatch`)
+
+Combine your external **4K USB webcam**, **built-in laptop camera**, and **PuppyPi Pro mobile FPV + LD19 LiDAR** in one split-screen command center with **zero terminal scripts required** (browser-native WebRTC multi-camera capture with per-slot device selector, 1-click camera swap, and 4K/1080p resolution presets). TwinScan computes exact **Shapely frustum overlap & 0/1/2/3+ dead-zone polygons**, scores your camera placement angle with a live **GDOP Placement Advisor**, calibrates 6-DOF extrinsics via **1-click AprilTag `solvePnP`** or **4-Point Floor Click Homography** (no printed tags needed), tracks cross-view targets (`TRK-01`) with **2σ GDOP uncertainty ellipses**, lets you **click any floor spot to task PuppyPi**, and inspects distant targets via a **Tiered ROI Upscale Loupe** (instant local Lanczos+CLAHE or optional `fal.ai` super-resolution with Fernet-encrypted `fal_api_key` in `/config`).
+
+### 2. Real-Room 3D Reconstruction & Dual WebGL Digital Twins (`/twin`)
 
 Point the robot's camera at a wall or run an automated 360° sweep. TwinScan stacks camera frames, runs **Depth Anything V2 Small (ONNX)** with flip test-time augmentation, anchors the depth map to denoised LD19 LiDAR rays, bakes a tangent-space normal map, and writes the mesh to PostgreSQL 18. You can inspect the same room in **Three.js 0.187** or **Babylon.js 9 PBR** in `Solid`, `Translucent`, or `Wireframe` mode and download the entire room as a single binary `.glb` file.
 

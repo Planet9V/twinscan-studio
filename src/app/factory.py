@@ -208,6 +208,7 @@ def create_app(
     app.state.robot_store = active_robot_store
     app.state.robot_ai_store = active_ai_store
     app.state.ai_vision_engine = ai_vision_engine
+    overwatch_manager.attach_repository(runtime.repo)
     app.state.overwatch_manager = overwatch_manager
     app.state.patrol_manager = patrol_manager
     app.state.explorer_manager = explorer_manager

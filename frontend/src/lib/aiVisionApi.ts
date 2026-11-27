@@ -392,6 +392,8 @@ export async function startRobotPatrol(
     announce_voice?: boolean;
     require_lidar?: boolean;
     camera_avoidance?: boolean;
+    stability_preset?: string;
+    capture_3d_at_waypoints?: boolean;
   }
 ): Promise<PatrolStatus> {
   return requestAiVisionJson<PatrolStatus>(

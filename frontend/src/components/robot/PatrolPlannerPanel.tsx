@@ -109,14 +109,17 @@ export function PatrolPlannerPanel({ robot }: PatrolPlannerPanelProps) {
     }
   }, [showFpvPip, activeTab, abortFpvSocket]);
 
-  // URL-synced ?tab=patrol|explore (Next.js 16 static prerender safe — no useSearchParams!)
+  // URL-synced ?tab=patrol|explore (reacts to sidebar clicks between /patrol and /patrol?tab=explore)
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    const tab = params.get("tab");
-    if (tab === "explore" || tab === "patrol") {
-      setActiveTab(tab);
-    }
+    const syncTabFromUrl = () => {
+      const params = new URLSearchParams(window.location.search);
+      const tab = params.get("tab");
+      setActiveTab(tab === "explore" ? "explore" : "patrol");
+    };
+    syncTabFromUrl();
+    window.addEventListener("popstate", syncTabFromUrl);
+    return () => window.removeEventListener("popstate", syncTabFromUrl);
   }, []);
 
   const handleTabChange = useCallback((nextId: string) => {
@@ -129,11 +132,28 @@ export function PatrolPlannerPanel({ robot }: PatrolPlannerPanelProps) {
     }
   }, []);
 
-  const [waypoints, setWaypoints] = useState<PatrolWaypoint[]>([
-    { x: 1.0, y: 0.0, label: "WP-1", pause_sec: 1.5 },
-    { x: 1.0, y: 1.2, label: "WP-2", pause_sec: 1.5 },
-    { x: -0.5, y: 1.2, label: "WP-3", pause_sec: 1.5 },
-  ]);
+  const [waypoints, setWaypoints] = useState<PatrolWaypoint[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = window.localStorage.getItem("eigenia_patrol_waypoints_v1");
+      if (raw !== null) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed as PatrolWaypoint[];
+      }
+    } catch {
+      // ignore corrupted storage
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem("eigenia_patrol_waypoints_v1", JSON.stringify(waypoints));
+    } catch {
+      // ignore storage quota errors
+    }
+  }, [waypoints]);
   const [routeName, setRouteName] = useState("Lab Perimeter Patrol");
   const [loopEnabled, setLoopEnabled] = useState(true);
   const [maxSpeedCms, setMaxSpeedCms] = useState(7);
@@ -687,7 +707,10 @@ export function PatrolPlannerPanel({ robot }: PatrolPlannerPanelProps) {
                 variant="secondary"
                 className="h-7 px-2 text-[10px]"
                 disabled={waypoints.length === 0}
-                onClick={() => setWaypoints((prev) => prev.slice(0, -1))}
+                onClick={() => {
+                  setSelectedRouteId(null);
+                  setWaypoints((prev) => prev.slice(0, -1));
+                }}
               >
                 <Undo2 className="h-3 w-3" />
                 Undo
@@ -697,7 +720,11 @@ export function PatrolPlannerPanel({ robot }: PatrolPlannerPanelProps) {
                 variant="outline"
                 className="h-7 px-2 text-[10px]"
                 disabled={waypoints.length === 0}
-                onClick={() => setWaypoints([])}
+                onClick={() => {
+                  setSelectedRouteId(null);
+                  setWaypoints([]);
+                  setBanner({ kind: "ok", text: "Cleared all waypoints. Click the map or use Auto-Plan Blind-Spot Route to add new ones." });
+                }}
               >
                 Clear ({waypoints.length})
               </Button>
@@ -1054,7 +1081,10 @@ export function PatrolPlannerPanel({ robot }: PatrolPlannerPanelProps) {
                     </span>
                     <button
                       type="button"
-                      onClick={() => setWaypoints((prev) => prev.filter((_, i) => i !== idx))}
+                      onClick={() => {
+                    setSelectedRouteId(null);
+                    setWaypoints((prev) => prev.filter((_, i) => i !== idx));
+                  }}
                       className="text-eigenia-muted hover:text-eigenia-fault"
                     >
                       <Trash2 className="h-3 w-3" />

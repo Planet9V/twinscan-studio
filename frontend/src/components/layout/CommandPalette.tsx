@@ -156,6 +156,16 @@ export function CommandPalette(): React.JSX.Element | null {
         onSelect: () => go("/explore"),
       },
       {
+        id: "page-flash",
+        group: "Pages",
+        label: "Device Flasher",
+        subtitle: "Flash Raspberry Pi 3/4/5, Arduino, ESP32, Pico & micro:bit with headless SSH/Wi-Fi",
+        keywords: "flash sd card pi5 pi4 pi3 arduino esp32 pico microbit imager /flash",
+        icon: <Cpu className="h-4 w-4 text-cyan-400" />,
+        badge: "/flash",
+        onSelect: () => go("/flash"),
+      },
+      {
         id: "page-control",
         group: "Pages",
         label: "Robot Control & FPV",

@@ -17,6 +17,7 @@ import {
   Cpu,
   Crosshair,
   Gamepad2,
+  HardDrive,
   LayoutDashboard,
   MapPin,
   Mic,
@@ -62,6 +63,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/vision", label: "AI Vision & People", shortLabel: "Vision", group: "autonomy", icon: ScanFace },
   { href: "/voice", label: "Voice & OX", shortLabel: "Voice", group: "autonomy", icon: Mic },
   // Hardware & Lab (collapsible)
+  { href: "/flash", label: "Device Flasher", shortLabel: "Flasher", group: "hardware", icon: HardDrive },
   { href: "/architect", label: "Lab Architect", shortLabel: "Architect", group: "hardware", icon: Sparkles },
   { href: "/catalog", label: "Fleet & Parts", shortLabel: "Parts", group: "hardware", icon: Cpu },
   { href: "/graph", label: "Knowledge Graph", shortLabel: "Graph", group: "hardware", icon: Network },

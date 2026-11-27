@@ -58,6 +58,7 @@ services:
       TWINSCAN_MODELS_DIR: /app/data/models
     ports:
       - "8000:8000"
+    restart: unless-stopped
     volumes:
       - backend_data:/app/data
       - twinscan_models:/app/data/models
@@ -75,6 +76,7 @@ services:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
         NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000}
     container_name: eigenia-twinscan-frontend
+    restart: unless-stopped
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
       NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8000}

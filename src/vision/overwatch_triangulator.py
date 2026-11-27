@@ -283,6 +283,7 @@ class _CameraSlot:
     height: int = 0
     fps: float = 0.0
     last_frame_mono: float = 0.0
+    last_ai_mono: float = 0.0
     raw_jpeg: Optional[bytes] = None
     annotated_jpeg: Optional[bytes] = None
     detections: List[Dict[str, Any]] = field(default_factory=list)
@@ -302,6 +303,7 @@ class OverwatchCameraManager:
     def __init__(self) -> None:
         """Initialize default camera slots and OpenCV AprilTag detector."""
         self._lock = threading.RLock()
+        self._ai_lock = threading.Lock()
         self._slots: Dict[str, _CameraSlot] = {}
         for cid, cfg in KNOWN_CAMERA_DEFAULTS.items():
             self._slots[cid] = _CameraSlot(
@@ -566,49 +568,78 @@ class OverwatchCameraManager:
                 slot.camera_name = str(camera_name).strip()[:80]
             cal = slot.calibration
             mode = cal.mode
+            should_run_ai = (now_mono - slot.last_ai_mono) >= 0.40 or not slot.detections
+            cached_dets = list(slot.detections)
+            cached_tri = list(slot.triangulated_targets)
+
+        if not should_run_ai:
+            # Fast-path video pass-through (10 FPS smooth video while AI runs safely at ~2.5 Hz)
+            annotated = self._draw_hud_overlay(frame_bgr, slot, cached_dets, cached_tri)
+            with self._lock:
+                slot.width = w
+                slot.height = h
+                slot.fps = round(max(0.1, float(fps)), 1)
+                slot.last_frame_mono = now_mono
+                slot.raw_jpeg = bytes(jpeg_bytes)
+                slot.annotated_jpeg = annotated or bytes(jpeg_bytes)
+            return {
+                "ok": True,
+                "camera_id": slot.camera_id,
+                "camera_name": slot.camera_name,
+                "width": w,
+                "height": h,
+                "detections_count": len(cached_dets),
+                "triangulated_count": len(cached_tri),
+                "global_tracks_count": len(self._tracker.list_tracks(now_mono=now_mono)),
+            }
 
         raw_dets: List[Dict[str, Any]] = []
-        if mode in ("yolo", "triangulate") and ai_vision_engine is not None:
-            try:
-                raw_dets.extend(ai_vision_engine.detect_objects_and_animals(frame_bgr, conf_thresh=0.35))
-            except Exception as exc:
-                sys.stderr.write(f"[overwatch.yolo] Inference error: {exc}\n")
-
-        if mode in ("face", "triangulate") and ai_vision_engine is not None:
-            try:
-                faces = ai_vision_engine.detect_faces_and_embeddings(frame_bgr)
-                for idx, face in enumerate(faces):
-                    label = "Unknown Person"
-                    person_id = None
-                    if ai_store is not None and face.get("embedding"):
-                        try:
-                            match = ai_store.match_person_by_embedding(face["embedding"], threshold=0.45)
-                            if match:
-                                label = str(match.get("name") or "Known Person")
-                                person_id = match.get("id")
-                        except Exception as exc:
-                            sys.stderr.write(f"[overwatch.face_match] Error: {exc}\n")
-                    raw_dets.append(
-                        {
-                            "id": f"face-{idx}",
-                            "kind": "face",
-                            "label": label,
-                            "person_id": person_id,
-                            "confidence": float(face.get("confidence", 0.8)),
-                            "bbox_norm": face["bbox_norm"],
-                        }
-                    )
-            except Exception as exc:
-                sys.stderr.write(f"[overwatch.face] Inference error: {exc}\n")
-
-        if mode in ("apriltag", "triangulate"):
-            if ai_vision_engine is not None and hasattr(ai_vision_engine, "detect_apriltags"):
+        # Serialize OpenCV DNN (YOLO11n + YuNet + SFace) with _ai_lock to prevent concurrent forwardGraph crashes
+        with self._ai_lock:
+            if mode in ("yolo", "triangulate") and ai_vision_engine is not None:
                 try:
-                    raw_dets.extend(ai_vision_engine.detect_apriltags(frame_bgr))
+                    raw_dets.extend(ai_vision_engine.detect_objects_and_animals(frame_bgr, conf_thresh=0.35))
                 except Exception as exc:
-                    sys.stderr.write(f"[overwatch.apriltag] Engine error: {exc}\n")
-            else:
-                raw_dets.extend(self._detect_local_apriltags(frame_bgr))
+                    sys.stderr.write(f"[overwatch.yolo] Inference error: {exc}\n")
+
+            if mode in ("face", "triangulate") and ai_vision_engine is not None:
+                try:
+                    faces = ai_vision_engine.detect_faces_and_embeddings(frame_bgr)
+                    for idx, face in enumerate(faces):
+                        label = "Unknown Person"
+                        person_id = None
+                        if ai_store is not None and face.get("embedding"):
+                            try:
+                                matcher = getattr(ai_store, "match_face_embedding", None) or getattr(
+                                    ai_store, "match_person_by_embedding", None
+                                )
+                                match = matcher(face["embedding"], threshold=0.38) if callable(matcher) else None
+                                if match:
+                                    label = str(match.get("name") or "Known Person")
+                                    person_id = match.get("id")
+                            except Exception as exc:
+                                sys.stderr.write(f"[overwatch.face_match] Error: {exc}\n")
+                        raw_dets.append(
+                            {
+                                "id": f"face-{idx}",
+                                "kind": "face",
+                                "label": label,
+                                "person_id": person_id,
+                                "confidence": float(face.get("confidence", 0.8)),
+                                "bbox_norm": face["bbox_norm"],
+                            }
+                        )
+                except Exception as exc:
+                    sys.stderr.write(f"[overwatch.face] Inference error: {exc}\n")
+
+            if mode in ("apriltag", "triangulate"):
+                if ai_vision_engine is not None and hasattr(ai_vision_engine, "detect_apriltags"):
+                    try:
+                        raw_dets.extend(ai_vision_engine.detect_apriltags(frame_bgr))
+                    except Exception as exc:
+                        sys.stderr.write(f"[overwatch.apriltag] Engine error: {exc}\n")
+                else:
+                    raw_dets.extend(self._detect_local_apriltags(frame_bgr))
 
         from src.vision.overwatch_tracker import compute_hsv_descriptor
 
@@ -752,6 +783,7 @@ class OverwatchCameraManager:
             slot.height = h
             slot.fps = round(max(0.1, float(fps)), 1)
             slot.last_frame_mono = now_mono
+            slot.last_ai_mono = now_mono
             slot.raw_jpeg = bytes(jpeg_bytes)
             slot.annotated_jpeg = annotated or bytes(jpeg_bytes)
             slot.detections = detections_out

@@ -117,3 +117,54 @@ def test_triangulate_n_rays_requires_two_rays() -> None:
     """Single ray raises ValueError."""
     with pytest.raises(ValueError, match="at least 2"):
         triangulate_n_rays_weighted([{"origin": [0, 0, 1], "direction": [1, 0, 0]}])
+
+
+def test_overwatch_concurrent_dual_camera_ingest_is_thread_safe() -> None:
+    """Concurrent frames from usb_4k + macbook_cam serialize AI inference without crashing."""
+    import concurrent.futures
+    import threading
+    import cv2
+
+    from src.vision.overwatch_triangulator import OverwatchCameraManager
+
+    mgr = OverwatchCameraManager()
+    img = np.full((180, 320, 3), (80, 120, 160), dtype=np.uint8)
+    ok, buf = cv2.imencode(".jpg", img)
+    assert ok
+    jpg = buf.tobytes()
+
+    in_use = threading.Event()
+    overlap_detected = False
+
+    class _StrictSerialVision:
+        def detect_objects_and_animals(self, frame_bgr, conf_thresh=0.35):
+            nonlocal overlap_detected
+            if in_use.is_set():
+                overlap_detected = True
+            in_use.set()
+            try:
+                return [{"id": "o1", "kind": "object", "label": "person", "confidence": 0.9, "bbox_norm": [0.3, 0.2, 0.7, 0.9]}]
+            finally:
+                in_use.clear()
+
+        def detect_faces_and_embeddings(self, frame_bgr):
+            return [{"confidence": 0.85, "bbox_norm": [0.4, 0.2, 0.6, 0.4], "embedding": [0.1] * 8}]
+
+    class _StoreWithMatchFaceEmbedding:
+        def match_face_embedding(self, emb, threshold=0.38):
+            return {"id": "p1", "name": "Jim"}
+
+    vision = _StrictSerialVision()
+    store = _StoreWithMatchFaceEmbedding()
+
+    def _push(cid: str):
+        return mgr.ingest_frame(jpg, camera_id=cid, ai_vision_engine=vision, ai_store=store)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        futs = [pool.submit(_push, "usb_4k" if i % 2 == 0 else "macbook_cam") for i in range(8)]
+        results = [f.result() for f in futs]
+
+    assert all(r["ok"] for r in results)
+    assert overlap_detected is False
+    st = mgr.get_status(camera_id="usb_4k")
+    assert any(d["label"] == "Jim" for d in st["detections"])

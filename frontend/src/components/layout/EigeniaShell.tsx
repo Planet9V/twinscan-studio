@@ -9,6 +9,7 @@ import {
   BookOpen,
   Bot,
   Cable,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Command,
@@ -28,6 +29,7 @@ import {
   ScanFace,
   Settings2,
   Sparkles,
+  Star,
   Wifi,
   WifiOff,
   X,
@@ -44,25 +46,44 @@ interface NavItem {
   href: string;
   label: string;
   shortLabel: string;
+  group: "operations" | "autonomy" | "hardware" | "system";
   icon: React.ComponentType<{ className?: string }>;
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { href: "/welcome", label: "Showcase", shortLabel: "Showcase", icon: Rocket },
-  { href: "/", label: "Mission Control", shortLabel: "Mission", icon: LayoutDashboard },
-  { href: "/twin", label: "Spatial LiDAR Twin", shortLabel: "Twin", icon: Radar },
-  { href: "/overwatch", label: "Overwatch Cockpit", shortLabel: "Overwatch", icon: Crosshair },
-  { href: "/control", label: "Robot Control & FPV", shortLabel: "Control", icon: Gamepad2 },
-  { href: "/voice", label: "Voice & OX Assistant", shortLabel: "Voice", icon: Mic },
-  { href: "/vision", label: "AI Vision & People", shortLabel: "Vision", icon: ScanFace },
-  { href: "/patrol", label: "Waypoint Patrol", shortLabel: "Patrol", icon: Route },
-  { href: "/explore", label: "Autonomous Explore & Map", shortLabel: "Explore", icon: Compass },
-  { href: "/catalog", label: "Fleet BOM & SBOM", shortLabel: "Catalog", icon: Cpu },
-  { href: "/architect", label: "Lab Architect", shortLabel: "Architect", icon: Sparkles },
-  { href: "/graph", label: "Knowledge Graph", shortLabel: "Graph", icon: Network },
-  { href: "/config", label: "Robot Config & Admin", shortLabel: "Config", icon: Settings2 },
-  { href: "/wiki", label: "Wiki & Wizard", shortLabel: "Wiki", icon: BookOpen },
+  // Live Operations
+  { href: "/", label: "Mission Control", shortLabel: "Mission", group: "operations", icon: LayoutDashboard },
+  { href: "/twin", label: "Rooms & 3D Map", shortLabel: "Rooms & 3D", group: "operations", icon: Radar },
+  { href: "/overwatch", label: "Overwatch Cameras", shortLabel: "Overwatch", group: "operations", icon: Crosshair },
+  { href: "/control", label: "Drive & FPV", shortLabel: "Drive", group: "operations", icon: Gamepad2 },
+  // Autonomy & AI
+  { href: "/explore", label: "Explore & Map", shortLabel: "Explore", group: "autonomy", icon: Compass },
+  { href: "/patrol", label: "Waypoint Patrol", shortLabel: "Patrol", group: "autonomy", icon: Route },
+  { href: "/vision", label: "AI Vision & People", shortLabel: "Vision", group: "autonomy", icon: ScanFace },
+  { href: "/voice", label: "Voice & OX", shortLabel: "Voice", group: "autonomy", icon: Mic },
+  // Hardware & Lab (collapsible)
+  { href: "/architect", label: "Lab Architect", shortLabel: "Architect", group: "hardware", icon: Sparkles },
+  { href: "/catalog", label: "Fleet & Parts", shortLabel: "Parts", group: "hardware", icon: Cpu },
+  { href: "/graph", label: "Knowledge Graph", shortLabel: "Graph", group: "hardware", icon: Network },
+  // System & Docs (collapsible)
+  { href: "/config", label: "Settings & Secrets", shortLabel: "Settings", group: "system", icon: Settings2 },
+  { href: "/wiki", label: "Wiki & Setup", shortLabel: "Wiki", group: "system", icon: BookOpen },
+  { href: "/welcome", label: "Showcase", shortLabel: "Showcase", group: "system", icon: Rocket },
 ];
+
+const NAV_GROUPS: Array<{
+  id: NavItem["group"];
+  title: string;
+  collapsible: boolean;
+}> = [
+  { id: "operations", title: "Live Operations", collapsible: false },
+  { id: "autonomy", title: "Autonomy & AI", collapsible: false },
+  { id: "hardware", title: "Hardware & Lab", collapsible: true },
+  { id: "system", title: "System & Docs", collapsible: true },
+];
+
+const DEFAULT_FAVORITES = ["/twin", "/overwatch", "/control", "/explore"];
+const FAVORITES_STORAGE_KEY = "eigenia_nav_favorites_v1";
 
 function formatBattery(batteryMv?: number | null): { label: string; variant: "sky" | "amber" | "fault" } | null {
   if (batteryMv == null || Number.isNaN(batteryMv) || batteryMv <= 0) return null;
@@ -75,7 +96,63 @@ function formatBattery(batteryMv?: number | null): { label: string; variant: "sk
 export function EigeniaShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const [favorites, setFavorites] = useState<string[]>(DEFAULT_FAVORITES);
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
+    operations: true,
+    autonomy: true,
+    hardware: false,
+    system: false,
+  });
   const [newRoomOpen, setNewRoomOpen] = useState(false);
+
+  // Hydrate persisted Favorites from localStorage after mount (SSR-safe)
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(FAVORITES_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          const valid = parsed.filter((h): h is string => typeof h === "string" && NAV_ITEMS.some((i) => i.href === h));
+          setFavorites(valid);
+        }
+      }
+    } catch {
+      // keep defaults
+    }
+  }, []);
+
+  // Auto-expand collapsible group if the user is currently visiting a page inside it
+  useEffect(() => {
+    const active = NAV_ITEMS.find((item) =>
+      item.href === "/" ? pathname === "/" : pathname === item.href || pathname.startsWith(`${item.href}/`)
+    );
+    if (active && (active.group === "hardware" || active.group === "system")) {
+      setOpenGroups((prev) => (prev[active.group] ? prev : { ...prev, [active.group]: true }));
+    }
+  }, [pathname]);
+
+  const toggleFavorite = (href: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setFavorites((prev) => {
+      const next = prev.includes(href) ? prev.filter((h) => h !== href) : [...prev, href];
+      try {
+        window.localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // ignore quota
+      }
+      return next;
+    });
+  };
+
+  const resetFavorites = () => {
+    setFavorites(DEFAULT_FAVORITES);
+    try {
+      window.localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(DEFAULT_FAVORITES));
+    } catch {
+      // ignore
+    }
+  };
   const [newRoomName, setNewRoomName] = useState("");
   const [newRoomFacility, setNewRoomFacility] = useState("");
   const [creatingRoom, setCreatingRoom] = useState(false);
@@ -237,38 +314,123 @@ export function EigeniaShell({ children }: { children: React.ReactNode }) {
           </Button>
         </div>
 
-        <nav className="flex flex-1 flex-col gap-1 p-2">
-          {NAV_ITEMS.map((item) => {
-            const Icon = item.icon;
-            const isActive =
-              item.href === "/" ? pathname === "/" : pathname === item.href || pathname.startsWith(`${item.href}/`);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                title={item.label}
-                className={cn(
-                  "group relative flex items-center gap-3 rounded-md px-2.5 py-2 text-xs font-medium transition-colors",
-                  isActive
-                    ? isRos2
-                      ? "border border-eigenia-orange bg-eigenia-orange/30 text-white shadow-[0_0_12px_rgba(224,90,16,0.22)]"
-                      : "border border-eigenia-orange/50 bg-eigenia-orange/20 text-white"
-                    : "border border-transparent text-eigenia-muted hover:bg-white/5 hover:text-white"
-                )}
-              >
-                {isActive && (
-                  <span className="absolute inset-y-1.5 left-0 w-1 rounded-r bg-eigenia-orange" />
-                )}
-                <Icon
-                  className={cn(
-                    "h-4 w-4 shrink-0",
-                    isActive ? "text-eigenia-orange" : "text-eigenia-muted group-hover:text-eigenia-sky"
+        <nav className="flex flex-1 flex-col gap-3 overflow-y-auto p-2">
+          {/* Pinned Favorites Section */}
+          {(() => {
+            const favItems = favorites
+              .map((href) => NAV_ITEMS.find((i) => i.href === href))
+              .filter((i): i is NavItem => Boolean(i));
+
+            const renderNavRow = (item: NavItem, inFavSection: boolean) => {
+              const Icon = item.icon;
+              const isActive =
+                item.href === "/" ? pathname === "/" : pathname === item.href || pathname.startsWith(`${item.href}/`);
+              const isFav = favorites.includes(item.href);
+              return (
+                <div key={`${inFavSection ? "fav" : "grp"}-${item.href}`} className="group relative flex items-center">
+                  <Link
+                    href={item.href}
+                    title={item.label}
+                    className={cn(
+                      "relative flex flex-1 cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
+                      !collapsed && "pr-8",
+                      isActive
+                        ? isRos2
+                          ? "border border-eigenia-orange bg-eigenia-orange/30 text-white shadow-[0_0_12px_rgba(224,90,16,0.22)]"
+                          : "border border-eigenia-orange/50 bg-eigenia-orange/20 text-white"
+                        : "border border-transparent text-eigenia-muted hover:bg-white/5 hover:text-white"
+                    )}
+                  >
+                    {isActive && (
+                      <span className="absolute inset-y-1.5 left-0 w-1 rounded-r bg-eigenia-orange" />
+                    )}
+                    <Icon
+                      className={cn(
+                        "h-4 w-4 shrink-0",
+                        isActive ? "text-eigenia-orange" : "text-eigenia-muted group-hover:text-eigenia-sky"
+                      )}
+                    />
+                    {!collapsed && <span className="truncate">{item.label}</span>}
+                  </Link>
+                  {!collapsed && (
+                    <button
+                      type="button"
+                      onClick={(e) => toggleFavorite(item.href, e)}
+                      aria-label={isFav ? `Remove ${item.label} from Favorites` : `Pin ${item.label} to Favorites`}
+                      title={isFav ? "Remove from Favorites" : "Pin to Favorites"}
+                      className={cn(
+                        "absolute right-1.5 flex h-6 w-6 cursor-pointer items-center justify-center rounded transition-opacity",
+                        isFav
+                          ? "text-amber-400 opacity-90 hover:text-amber-300"
+                          : "text-slate-500 opacity-0 hover:text-amber-300 group-hover:opacity-100 focus:opacity-100"
+                      )}
+                    >
+                      <Star className={cn("h-3 w-3", isFav && "fill-current")} />
+                    </button>
                   )}
-                />
-                {!collapsed && <span className="truncate">{item.label}</span>}
-              </Link>
+                </div>
+              );
+            };
+
+            return (
+              <>
+                {favItems.length > 0 && (
+                  <div className="space-y-0.5">
+                    {!collapsed && (
+                      <div className="flex items-center justify-between px-2 pb-1">
+                        <span className="flex items-center gap-1 font-mono text-[10px] font-semibold uppercase tracking-wider text-amber-400/90">
+                          <Star className="h-2.5 w-2.5 fill-current" />
+                          Favorites
+                        </span>
+                        <button
+                          type="button"
+                          onClick={resetFavorites}
+                          className="cursor-pointer font-mono text-[9px] text-slate-500 hover:text-slate-300"
+                          title="Reset default favorites"
+                        >
+                          Reset
+                        </button>
+                      </div>
+                    )}
+                    {favItems.map((item) => renderNavRow(item, true))}
+                    <div className="my-1.5 border-b border-white/10" />
+                  </div>
+                )}
+
+                {NAV_GROUPS.map((grp) => {
+                  const groupItems = NAV_ITEMS.filter((i) => i.group === grp.id);
+                  const isOpen = !grp.collapsible || openGroups[grp.id];
+                  return (
+                    <div key={grp.id} className="space-y-0.5">
+                      {!collapsed && (
+                        grp.collapsible ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setOpenGroups((prev) => ({ ...prev, [grp.id]: !prev[grp.id] }))
+                            }
+                            className="flex w-full cursor-pointer items-center justify-between px-2 py-1 font-mono text-[10px] font-semibold uppercase tracking-wider text-slate-400 hover:text-white"
+                          >
+                            <span>{grp.title}</span>
+                            {isOpen ? (
+                              <ChevronDown className="h-3 w-3" />
+                            ) : (
+                              <ChevronRight className="h-3 w-3" />
+                            )}
+                          </button>
+                        ) : (
+                          <div className="px-2 pb-0.5 font-mono text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                            {grp.title}
+                          </div>
+                        )
+                      )}
+                      {(collapsed || isOpen) && groupItems.map((item) => renderNavRow(item, false))}
+                    </div>
+                  );
+                })}
+              </>
             );
-          })}
+          })()}
         </nav>
 
         {/* Footer System Metadata */}
@@ -331,19 +493,22 @@ export function EigeniaShell({ children }: { children: React.ReactNode }) {
               EIGENIA <span className="text-eigenia-orange">//</span> TWINSCAN
             </span>
 
-            {/* Active Space Selector + Quick "+ New Room" Popover */}
+            {/* Active Space Selector + 1-Click 3D Map + Quick "+ New Room" Popover */}
             <div ref={newRoomRef} className="relative flex items-center gap-1.5">
               <div className="flex items-center gap-1.5 rounded-md border border-white/10 bg-eigenia-obsidian px-2 py-1">
                 <MapPin className="h-3.5 w-3.5 text-eigenia-sky" />
+                <span className="hidden font-mono text-[10px] font-semibold uppercase tracking-wider text-slate-400 sm:inline">
+                  Room:
+                </span>
                 <select
-                  aria-label="Active Space"
+                  aria-label="Active Room"
                   value={activeSpaceId}
                   onChange={(e) => setActiveSpaceId(e.target.value)}
-                  className="bg-transparent font-mono text-[11px] text-white focus:outline-none"
+                  className="cursor-pointer bg-transparent font-mono text-[11px] text-white focus:outline-none"
                 >
                   {spaces.length === 0 ? (
                     <option value="" className="bg-eigenia-obsidian text-eigenia-muted">
-                      Loading Space...
+                      Loading Room...
                     </option>
                   ) : (
                     spaces.map((sp) => (
@@ -354,6 +519,15 @@ export function EigeniaShell({ children }: { children: React.ReactNode }) {
                   )}
                 </select>
               </div>
+
+              <Link
+                href="/twin"
+                className="inline-flex h-7 cursor-pointer items-center gap-1 rounded-md border border-cyan-500/40 bg-cyan-950/40 px-2 font-mono text-[10px] font-semibold text-cyan-200 transition hover:bg-cyan-900/50"
+                title="Open active room 2D Radar & 3D Digital Twin Map"
+              >
+                <Radar className="h-3 w-3 text-cyan-400" />
+                3D Map
+              </Link>
 
               <Button
                 type="button"

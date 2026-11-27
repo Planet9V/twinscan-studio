@@ -201,6 +201,19 @@ def test_conversational_config_personalities_chat_and_hands_free_endpoints() -> 
                     }
                 ),
             ),
+            patch(
+                "src.api.routes_voice.speak_sentences_streaming",
+                new=AsyncMock(
+                    return_value={
+                        "ok": True,
+                        "text": "ok",
+                        "engine": "piper_tts",
+                        "voice": "en_US-lessac-medium",
+                        "anti_clip": True,
+                        "bytes_sent": 16000,
+                    }
+                ),
+            ),
             patch("src.api.routes_voice.publish_pose", new=AsyncMock(return_value={"published": True})) as mock_pose,
             patch("src.api.routes_voice.set_rgb", new=AsyncMock(return_value={"published": True})),
         ):

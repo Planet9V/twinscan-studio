@@ -116,6 +116,21 @@ async def _auto_attach_live_robot_lidar(app: FastAPI) -> bool:
                 rosbridge_port=ros_port,
                 ros_version=normalize_ros_mode(distro),
             )
+            # Default Dark Mode: turn PuppyPi RGB LEDs off on startup unless explicitly disabled in /config
+            try:
+                raw_cfg = rt.repo.get_settings_raw() if rt.repo is not None else {}
+                dark_mode = str(raw_cfg.get("robot_led_dark_mode") or "true").strip().lower() != "false"
+                if dark_mode:
+                    from src.robot.rosbridge_proxy import set_rgb
+
+                    await set_rgb(
+                        ip=ip,
+                        port=ros_port,
+                        data=[{"id": 1, "r": 0, "g": 0, "b": 0}, {"id": 2, "r": 0, "g": 0, "b": 0}],
+                        ros_version=normalize_ros_mode(distro),
+                    )
+            except Exception as exc:
+                sys.stderr.write(f"[robots.auto_attach] Default dark-mode RGB off skipped: {exc}\n")
             return True
     return False
 

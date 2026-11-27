@@ -42,6 +42,7 @@ MANAGED_SETTING_SPECS: List[dict[str, Any]] = [
     {"key": "default_camera_yaw_offset_deg", "is_secret": False, "category": "spatial", "description": "Camera-to-LiDAR boresight yaw offset (deg)"},
     {"key": "default_wall_height_m", "is_secret": False, "category": "spatial", "description": "3D extruded wall height (m) in Three.js & Babylon.js"},
     {"key": "overwatch_calibrations_json", "is_secret": False, "category": "spatial", "description": "Persisted JSON map of Overwatch camera extrinsics & 4-point homographies"},
+    {"key": "robot_led_dark_mode", "is_secret": False, "category": "spatial", "description": "Default PuppyPi RGB LEDs to Dark Mode (off) on startup ('true' or 'false')"},
     {"key": "max_upload_mb", "is_secret": False, "category": "storage", "description": "Maximum single file upload size (MB) into PostgreSQL"},
     {"key": "openclaw_gateway_url", "is_secret": False, "category": "openclaw", "description": "Portable OpenClaw Gateway URL (e.g. http://openclaw-gateway:18789)"},
     {"key": "openclaw_gateway_token", "is_secret": True, "category": "openclaw", "description": "Fernet-encrypted OpenClaw Gateway authentication token"},

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from src.robot.stability_guard import (
     DEFAULT_STABILITY_PRESET,
     STABLE_GAIT_PRESETS,
@@ -60,3 +62,41 @@ def test_visual_slip_detector_catches_carpet_stall() -> None:
     det.update(6.0, {"seen": True, "x": 0.0, "y": 0.0}, now_mono=20.0)
     ok = det.update(6.0, {"seen": True, "x": 0.25, "y": 0.0}, now_mono=23.0)
     assert ok["stalled"] is False
+
+
+@pytest.mark.asyncio
+async def test_auto_attach_applies_default_dark_mode_leds() -> None:
+    """Startup auto-attach turns PuppyPi RGB LEDs off (0,0,0) by default."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    from src.app.factory import _auto_attach_live_robot_lidar
+    from src.db.repository import InMemoryTwinRepository
+
+    repo = InMemoryTwinRepository()
+    rt = SimpleNamespace(
+        source_mode="simulator",
+        active_lidar_robot_id=None,
+        _rotation_user_overridden=False,
+        filter_config=SimpleNamespace(rotation_offset_deg=0.0),
+        start_robot_ros2_bridge=AsyncMock(),
+        repo=repo,
+    )
+    store = SimpleNamespace(
+        list_robots=lambda: [
+            {"id": "r1", "ip_address": "192.168.1.119", "active_ros_distro": "ros2", "rosbridge_port": 9090}
+        ]
+    )
+    app = SimpleNamespace(state=SimpleNamespace(runtime=rt, robot_store=store))
+    rgb_mock = AsyncMock(return_value={"sent": True})
+
+    with (
+        patch("src.app.factory._probe_tcp_port", new=AsyncMock(return_value=True)),
+        patch("src.robot.rosbridge_proxy.set_rgb", new=rgb_mock),
+    ):
+        attached = await _auto_attach_live_robot_lidar(app)
+
+    assert attached is True
+    rgb_mock.assert_awaited_once()
+    call_kwargs = rgb_mock.await_args.kwargs
+    assert call_kwargs["data"] == [{"id": 1, "r": 0, "g": 0, "b": 0}, {"id": 2, "r": 0, "g": 0, "b": 0}]

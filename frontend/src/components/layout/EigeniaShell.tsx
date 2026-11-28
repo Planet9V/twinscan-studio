@@ -67,6 +67,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/vision", label: "AI Vision & People", shortLabel: "Vision", group: "autonomy", icon: ScanFace },
   { href: "/voice", label: "Voice & OX", shortLabel: "Voice", group: "autonomy", icon: Mic },
   // Hardware & Lab (collapsible)
+  { href: "/microbit", label: "micro:bit v2.2 Lab", shortLabel: "micro:bit", group: "hardware", icon: Cpu },
   { href: "/flash", label: "Device Flasher", shortLabel: "Flasher", group: "hardware", icon: HardDrive },
   { href: "/architect", label: "Lab Architect", shortLabel: "Architect", group: "hardware", icon: Sparkles },
   { href: "/catalog", label: "Fleet & Parts", shortLabel: "Parts", group: "hardware", icon: Cpu },

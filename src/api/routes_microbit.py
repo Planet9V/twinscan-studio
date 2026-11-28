@@ -1,0 +1,209 @@
+"""FastAPI router for the dedicated BBC micro:bit v2.2 3D Project Lab (/microbit)."""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+import uuid
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel, Field
+
+from src.microbit.bridge import (
+    deploy_micropython_code,
+    probe_microbit_hardware,
+    read_microbit_live_sensors,
+    resolve_microbit_host,
+)
+from src.microbit.catalog import (
+    ACCESSORY_BY_ID,
+    MICROBIT_ACCESSORIES,
+    MICROBIT_V2_PINS,
+    STARTER_TEMPLATES,
+    generate_prototype_code,
+)
+from src.microbit.project_store import MicrobitProjectStore
+
+router = APIRouter(prefix="/api/microbit", tags=["microbit"])
+
+
+def _get_store(request: Request) -> MicrobitProjectStore:
+    store = getattr(request.app.state, "microbit_store", None)
+    if store is None:
+        store = MicrobitProjectStore()
+        runtime = getattr(request.app.state, "runtime", None)
+        repo = getattr(request.app.state, "twin_repo", None) or getattr(runtime, "repo", None)
+        if repo is not None:
+            store.attach_repository(repo)
+        request.app.state.microbit_store = store
+    return store
+
+
+class CreateMicrobitProjectRequest(BaseModel):
+    """Create a new micro:bit v2.2 prototype project."""
+
+    name: str = Field(..., min_length=1, max_length=96)
+    description: str = Field(default="", max_length=240)
+
+
+class AttachmentItem(BaseModel):
+    """Accessory attached to specific micro:bit v2.2 pins."""
+
+    id: Optional[str] = Field(default=None, max_length=32)
+    accessory_id: str = Field(..., max_length=48)
+    label: Optional[str] = Field(default=None, max_length=80)
+    pin: str = Field(default="P0", max_length=12)
+    secondary_pin: Optional[str] = Field(default=None, max_length=12)
+
+
+class UpdateMicrobitProjectRequest(BaseModel):
+    """Update a micro:bit project's metadata, attached accessories, or MicroPython code."""
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=96)
+    description: Optional[str] = Field(default=None, max_length=240)
+    attachments: Optional[List[AttachmentItem]] = Field(default=None)
+    code: Optional[str] = Field(default=None, max_length=20000)
+
+
+class DeployCodeRequest(BaseModel):
+    """Deploy MicroPython code to the live micro:bit v2.2."""
+
+    code: str = Field(..., min_length=1, max_length=20000)
+    host_robot_id: Optional[str] = Field(default=None, max_length=64)
+
+
+@router.get("/catalog")
+async def get_microbit_catalog() -> Dict[str, Any]:
+    """Return micro:bit v2.2 pinout schematics, accessory library, and starter templates."""
+    return {
+        "ok": True,
+        "board": {
+            "name": "BBC micro:bit v2.2",
+            "mcu": "Nordic nRF52833 (ARM Cortex-M4F @ 64MHz, 512KB Flash, 128KB RAM)",
+            "sensors": ["3-axis Accelerometer & Compass (LSM303)", "MEMS Microphone", "Onboard Speaker", "Touch Logo", "Temp & Light"],
+            "wireless": ["2.4 GHz Radio", "Bluetooth 5.1 Low Energy"],
+        },
+        "pins": MICROBIT_V2_PINS,
+        "accessories": MICROBIT_ACCESSORIES,
+        "templates": STARTER_TEMPLATES,
+    }
+
+
+@router.get("/projects")
+async def list_microbit_projects(request: Request) -> Dict[str, Any]:
+    """List all saved micro:bit v2.2 prototype projects."""
+    projects = _get_store(request).list_projects()
+    return {"ok": True, "projects": projects, "count": len(projects)}
+
+
+@router.post("/projects")
+async def create_microbit_project(request: Request, payload: CreateMicrobitProjectRequest) -> Dict[str, Any]:
+    """Create a new micro:bit v2.2 prototype project."""
+    proj = _get_store(request).create_project(name=payload.name, description=payload.description)
+    return {"ok": True, "project": proj}
+
+
+@router.patch("/projects/{project_id}")
+async def update_microbit_project(
+    request: Request,
+    project_id: str,
+    payload: UpdateMicrobitProjectRequest,
+) -> Dict[str, Any]:
+    """Update a micro:bit project's attached accessories, pins, or MicroPython code."""
+    store = _get_store(request)
+    proj = store.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="micro:bit project not found.")
+    if payload.name is not None:
+        proj["name"] = payload.name.strip()
+    if payload.description is not None:
+        proj["description"] = payload.description.strip()
+    if payload.attachments is not None:
+        cleaned = []
+        for item in payload.attachments:
+            spec = ACCESSORY_BY_ID.get(item.accessory_id)
+            if not spec:
+                continue
+            cleaned.append(
+                {
+                    "id": item.id or f"att_{uuid.uuid4().hex[:6]}",
+                    "accessory_id": item.accessory_id,
+                    "label": (item.label or spec["name"]).strip(),
+                    "pin": item.pin.upper(),
+                    "secondary_pin": item.secondary_pin.upper() if item.secondary_pin else spec.get("secondary_pin"),
+                }
+            )
+        proj["attachments"] = cleaned
+    if payload.code is not None:
+        proj["code"] = payload.code
+    saved = store.save_project(proj)
+    return {"ok": True, "project": saved}
+
+
+@router.delete("/projects/{project_id}")
+async def delete_microbit_project(request: Request, project_id: str) -> Dict[str, Any]:
+    """Delete a micro:bit prototype project."""
+    removed = _get_store(request).delete_project(project_id)
+    return {"ok": True, "removed": removed}
+
+
+@router.post("/projects/{project_id}/generate-code")
+async def generate_project_code(request: Request, project_id: str) -> Dict[str, Any]:
+    """Auto-generate MicroPython code for all accessories attached to this project."""
+    store = _get_store(request)
+    proj = store.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="micro:bit project not found.")
+    code = generate_prototype_code(proj.get("attachments") or [], project_name=proj.get("name") or "Prototype")
+    proj["code"] = code
+    saved = store.save_project(proj)
+    return {"ok": True, "code": code, "project": saved}
+
+
+@router.get("/hardware/status")
+async def get_microbit_hardware_status(request: Request) -> Dict[str, Any]:
+    """Probe the connected Raspberry Pi 5 for the live BBC micro:bit v2.2."""
+    robot_store = getattr(request.app.state, "robot_store", None)
+    try:
+        ip, user, pw, host_name = resolve_microbit_host(robot_store)
+        res = await asyncio.to_thread(probe_microbit_hardware, ip, user, pw, host_name)
+        return {"ok": True, **res}
+    except Exception as exc:
+        sys.stderr.write(f"[api.microbit.status] Warning: {exc}\n")
+        return {"ok": False, "connected": False, "error": str(exc)}
+
+
+@router.post("/hardware/deploy")
+async def deploy_to_microbit(request: Request, payload: DeployCodeRequest) -> Dict[str, Any]:
+    """Upload and run MicroPython code live on the connected micro:bit v2.2."""
+    robot_store = getattr(request.app.state, "robot_store", None)
+    try:
+        ip, user, pw, host_name = resolve_microbit_host(robot_store, payload.host_robot_id)
+        res = await asyncio.to_thread(deploy_micropython_code, ip, user, pw, payload.code)
+        return {"ok": bool(res.get("ok")), "host_name": host_name, **res}
+    except Exception as exc:
+        sys.stderr.write(f"[api.microbit.deploy] Error: {exc}\n")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/hardware/sensors")
+async def read_microbit_sensors(request: Request) -> Dict[str, Any]:
+    """Read live accelerometer, temperature, light, sound, and button state from micro:bit v2.2."""
+    robot_store = getattr(request.app.state, "robot_store", None)
+    try:
+        ip, user, pw, _ = resolve_microbit_host(robot_store)
+        return await asyncio.to_thread(read_microbit_live_sensors, ip, user, pw, False)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/hardware/self-test")
+async def run_microbit_self_test(request: Request) -> Dict[str, Any]:
+    """Trigger a live LED + chime hardware self-test and return sensor telemetry."""
+    robot_store = getattr(request.app.state, "robot_store", None)
+    try:
+        ip, user, pw, _ = resolve_microbit_host(robot_store)
+        return await asyncio.to_thread(read_microbit_live_sensors, ip, user, pw, True)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

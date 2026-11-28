@@ -1,0 +1,146 @@
+"""PostgreSQL 18 / In-Memory persistence for micro:bit v2.2 Prototype Projects."""
+
+from __future__ import annotations
+
+import json
+import sys
+import threading
+import time
+import uuid
+from typing import Any, Dict, List, Optional
+
+from src.microbit.catalog import STARTER_TEMPLATES, validate_project_wiring
+
+MICROBIT_PROJECTS_SETTING_KEY = "microbit_projects_json"
+
+
+def _default_project(name: str = "micro:bit v2.2 Interactive Prototype") -> Dict[str, Any]:
+    now = time.time()
+    attachments = [
+        {
+            "id": f"att_{uuid.uuid4().hex[:6]}",
+            "accessory_id": "sg90_servo",
+            "label": "SG90 Micro Servo",
+            "pin": "P0",
+            "secondary_pin": None,
+        },
+        {
+            "id": f"att_{uuid.uuid4().hex[:6]}",
+            "accessory_id": "neopixel_8",
+            "label": "NeoPixel RGB Strip",
+            "pin": "P1",
+            "secondary_pin": None,
+        },
+    ]
+    return {
+        "id": f"mb_{uuid.uuid4().hex[:8]}",
+        "name": name,
+        "description": "Interactive 3D pinout prototype with attached accessories and live MicroPython deployment.",
+        "attachments": attachments,
+        "code": STARTER_TEMPLATES[0]["code"],
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+class MicrobitProjectStore:
+    """Thread-safe repository storing micro:bit v2.2 prototype projects in ``app_settings``."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._repo: Any = None
+        self._projects: Dict[str, Dict[str, Any]] = {}
+
+    def attach_repository(self, repo: Any) -> int:
+        """Attach settings repository and hydrate persisted micro:bit projects."""
+        self._repo = repo
+        if repo is None:
+            return 0
+        getter = getattr(repo, "get_settings_raw", None) or getattr(repo, "get_raw_settings", None)
+        if getter is None:
+            return 0
+        try:
+            raw = getter() or {}
+            blob = str(raw.get(MICROBIT_PROJECTS_SETTING_KEY) or "").strip()
+            if not blob:
+                return 0
+            parsed = json.loads(blob)
+            if not isinstance(parsed, dict):
+                return 0
+            with self._lock:
+                self._projects = {str(k): dict(v) for k, v in parsed.items() if isinstance(v, dict)}
+                return len(self._projects)
+        except Exception as exc:
+            sys.stderr.write(f"[microbit.store] Load error: {exc}\n")
+            return 0
+
+    def _persist(self) -> None:
+        if self._repo is None or not hasattr(self._repo, "upsert_settings"):
+            return
+        try:
+            with self._lock:
+                payload = json.dumps(self._projects)
+            self._repo.upsert_settings({MICROBIT_PROJECTS_SETTING_KEY: payload}, source_ip="microbit_lab")
+        except Exception as exc:
+            sys.stderr.write(f"[microbit.store] Persist error: {exc}\n")
+
+    def _enrich(self, proj: Dict[str, Any]) -> Dict[str, Any]:
+        out = dict(proj)
+        out["wiring"] = validate_project_wiring(out.get("attachments") or [])
+        return out
+
+    def list_projects(self) -> List[Dict[str, Any]]:
+        """List all saved micro:bit projects (auto-seeds a starter project if empty)."""
+        with self._lock:
+            if not self._projects:
+                first = _default_project()
+                self._projects[first["id"]] = first
+                should_persist = True
+            else:
+                should_persist = False
+            items = [self._enrich(p) for p in self._projects.values()]
+        if should_persist:
+            self._persist()
+        items.sort(key=lambda p: float(p.get("updated_at") or 0.0), reverse=True)
+        return items
+
+    def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a single micro:bit project by ID."""
+        with self._lock:
+            proj = self._projects.get(project_id)
+            return self._enrich(proj) if proj is not None else None
+
+    def create_project(self, *, name: str, description: str = "") -> Dict[str, Any]:
+        """Create and persist a new blank micro:bit v2.2 prototype project."""
+        now = time.time()
+        proj = {
+            "id": f"mb_{uuid.uuid4().hex[:8]}",
+            "name": name.strip() or "New micro:bit Prototype",
+            "description": description.strip(),
+            "attachments": [],
+            "code": STARTER_TEMPLATES[0]["code"],
+            "created_at": now,
+            "updated_at": now,
+        }
+        with self._lock:
+            self._projects[proj["id"]] = proj
+        self._persist()
+        return self._enrich(proj)
+
+    def save_project(self, project: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist updates to an existing micro:bit project."""
+        clean = {k: v for k, v in project.items() if k != "wiring"}
+        clean["updated_at"] = time.time()
+        with self._lock:
+            self._projects[str(clean["id"])] = clean
+        self._persist()
+        return self._enrich(clean)
+
+    def delete_project(self, project_id: str) -> bool:
+        """Delete a micro:bit project by ID."""
+        with self._lock:
+            existed = project_id in self._projects
+            self._projects.pop(project_id, None)
+        if existed:
+            self._persist()
+        return existed

@@ -61,7 +61,8 @@ def _default_project(name: str = "micro:bit v2.2 Interactive Prototype") -> Dict
     return {
         "id": f"mb_{uuid.uuid4().hex[:8]}",
         "name": name,
-        "description": "Interactive 3D pinout prototype with AI Co-Pilot simulator and live MicroPython deployment.",
+        "board_id": "microbit_v2",
+        "description": "Interactive 3D pinout prototype with AI Co-Pilot simulator and live deployment.",
         "attachments": attachments,
         "sim_rules": sim_rules,
         "chat_history": [],
@@ -114,7 +115,9 @@ class MicrobitProjectStore:
 
     def _enrich(self, proj: Dict[str, Any]) -> Dict[str, Any]:
         out = dict(proj)
-        out["wiring"] = validate_project_wiring(out.get("attachments") or [])
+        board_id = str(out.get("board_id") or "microbit_v2")
+        out["board_id"] = board_id
+        out["wiring"] = validate_project_wiring(out.get("attachments") or [], board_id=board_id)
         return out
 
     def list_projects(self) -> List[Dict[str, Any]]:
@@ -138,12 +141,13 @@ class MicrobitProjectStore:
             proj = self._projects.get(project_id)
             return self._enrich(proj) if proj is not None else None
 
-    def create_project(self, *, name: str, description: str = "") -> Dict[str, Any]:
-        """Create and persist a new blank micro:bit v2.2 prototype project."""
+    def create_project(self, *, name: str, description: str = "", board_id: str = "microbit_v2") -> Dict[str, Any]:
+        """Create and persist a new blank multi-board prototype project."""
         now = time.time()
         proj = {
             "id": f"mb_{uuid.uuid4().hex[:8]}",
-            "name": name.strip() or "New micro:bit Prototype",
+            "name": name.strip() or "New Hardware Prototype",
+            "board_id": board_id if board_id in {"microbit_v2", "rpi5_16gb", "puppypi_pro"} else "microbit_v2",
             "description": description.strip(),
             "attachments": [],
             "sim_rules": [],

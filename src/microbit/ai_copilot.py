@@ -25,7 +25,19 @@ from src.microbit.catalog import ACCESSORY_BY_ID, MICROBIT_ACCESSORIES, MICROBIT
 MAX_LLM_RETRIES = 3
 
 VALID_TRIGGERS = frozenset(
-    {"lift", "tilt_left", "tilt_right", "shake", "button_a", "button_b", "logo_touch", "pir_motion"}
+    {
+        "lift",
+        "tilt_left",
+        "tilt_right",
+        "shake",
+        "button_a",
+        "button_b",
+        "logo_touch",
+        "pir_motion",
+        "touch_pad",
+        "ultrasonic_near",
+        "temp_high",
+    }
 )
 VALID_LED_ICONS = frozenset(
     {"HAPPY", "HEART", "SURPRISED", "SAD", "CONFUSED", "ARROW_N", "ARROW_E", "ARROW_W", "YES", "NO"}
@@ -261,7 +273,19 @@ def apply_deterministic_copilot_fallback(project: Dict[str, Any], user_message: 
         )
         changes.append(f"attached {spec['name']} on {pin}")
 
-    # Detect part attachment requests
+    # Detect part attachment requests (including all 4 Hiwonder PuppyPi Kit modules!)
+    if "temp" in low or "humid" in low or "aht10" in low:
+        _ensure_part("hiwonder_temp_hum_v11")
+    if "touch" in low and ("sensor" in low or "board" in low or "pad" in low or "hiwonder" in low):
+        _ensure_part("hiwonder_touch_sensor")
+    if "ultrasonic" in low or "distance" in low or "v5.6" in low:
+        _ensure_part("hiwonder_ultrasonic_v56")
+    if "matrix" in low or "8x16" in low or "tm1640" in low:
+        _ensure_part("hiwonder_led_matrix_8x16")
+    if "lidar" in low or "ld19" in low:
+        _ensure_part("ld19_lidar")
+    if "wonderecho" in low or "ai box" in low:
+        _ensure_part("wonderecho_ai_box")
     if "servo" in low:
         _ensure_part("sg90_servo")
     if "neopixel" in low or "rgb" in low or "led strip" in low:
@@ -270,10 +294,6 @@ def apply_deterministic_copilot_fallback(project: Dict[str, Any], user_message: 
         _ensure_part("external_speaker")
     if "oled" in low or "screen" in low:
         _ensure_part("oled_ssd1306")
-    if "ultrasonic" in low or "distance" in low:
-        _ensure_part("hcsr04_ultrasonic")
-    if "pir" in low or "motion" in low:
-        _ensure_part("pir_motion")
 
     # Extract quoted phrase if present (e.g. say "Weeee!")
     quoted = re.search(r'["\']([^"\']{1,60})["\']', msg)

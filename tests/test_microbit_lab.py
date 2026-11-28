@@ -24,11 +24,30 @@ def test_pin_conflict_validation_and_code_generation() -> None:
 
     bad = [
         {"accessory_id": "sg90_servo", "label": "Servo 1", "pin": "P0"},
-        {"accessory_id": "pir_motion", "label": "Motion", "pin": "P0"},
+        {"accessory_id": "hiwonder_touch_sensor", "label": "Touch", "pin": "P0"},
     ]
     res_bad = validate_project_wiring(bad)
     assert res_bad["ok"] is False
     assert any("P0" in c for c in res_bad["conflicts"])
+
+    # Verify 5V safety warning for Hiwonder Glowing Ultrasonic v5.6 on 3.3V micro:bit v2.2
+    hiwonder_5v = [{"accessory_id": "hiwonder_ultrasonic_v56", "label": "Glowing Ultrasonic", "pin": "P19"}]
+    res_5v = validate_project_wiring(hiwonder_5v, board_id="microbit_v2")
+    assert any("5V Safety" in w for w in res_5v["warnings"])
+    # On Raspberry Pi 5 (which has a 5V rail), no missing-5V warning!
+    res_pi5 = validate_project_wiring(hiwonder_5v, board_id="rpi5_16gb")
+    assert not any("5V Safety" in w for w in res_pi5["warnings"])
+
+    code_pi5 = generate_prototype_code(
+        [
+            {"accessory_id": "hiwonder_temp_hum_v11", "label": "Temp/Hum v1.1", "pin": "GPIO3"},
+            {"accessory_id": "hiwonder_led_matrix_8x16", "label": "8x16 Matrix", "pin": "GPIO23"},
+        ],
+        project_name="Pi 5 Weather Station",
+        board_id="rpi5_16gb",
+    )
+    assert "0x38" in code_pi5
+    assert "TM1640" in code_pi5
 
     code = generate_prototype_code(good, project_name="Robot Arm Test")
     assert "neopixel" in code
@@ -59,7 +78,7 @@ def test_microbit_lab_api_projects_and_catalog() -> None:
         f"/api/microbit/projects/{pid}",
         json={
             "attachments": [
-                {"accessory_id": "pir_motion", "label": "Desk PIR", "pin": "P2"},
+                {"accessory_id": "hiwonder_touch_sensor", "label": "Hiwonder Touch", "pin": "P2"},
                 {"accessory_id": "external_speaker", "label": "Loud Speaker", "pin": "P0"},
             ]
         },
@@ -69,7 +88,7 @@ def test_microbit_lab_api_projects_and_catalog() -> None:
 
     r_gen = client.post(f"/api/microbit/projects/{pid}/generate-code")
     assert r_gen.status_code == 200
-    assert "MOTION_DETECTED" in r_gen.json()["code"]
+    assert "TOUCH_DETECTED" in r_gen.json()["code"]
     assert "music.play" in r_gen.json()["code"]
 
     r_chat = client.post(

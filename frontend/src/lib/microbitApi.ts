@@ -17,16 +17,39 @@ export interface MicrobitAccessoryWire {
   color: string;
 }
 
+export type BoardId = "microbit_v2" | "rpi5_16gb" | "puppypi_pro";
+
+export interface BoardProfile {
+  id: BoardId;
+  name: string;
+  mcu: string;
+  logic_v: number;
+  has_5v_rail: boolean;
+  language: string;
+  pins: MicrobitPinSpec[];
+  sensors: string[];
+  wireless: string[];
+}
+
 export interface MicrobitAccessorySpec {
   id: string;
   name: string;
+  vendor?: string;
   category: string;
   color_hex: string;
+  ic?: string;
+  protocol?: string;
+  i2c_address?: string | null;
+  voltage_min_v?: number;
+  voltage_max_v?: number;
+  requires_5v?: boolean;
   allowed_signal_pins: string[];
   default_pin: string;
   secondary_pin: string | null;
+  default_pins_by_board?: Record<string, { pin: string; secondary_pin?: string | null }>;
   needs_power: boolean;
   power_note: string;
+  how_it_works?: string;
   wires: MicrobitAccessoryWire[];
   summary: string;
 }
@@ -64,7 +87,10 @@ export type MicrobitTrigger =
   | "button_a"
   | "button_b"
   | "logo_touch"
-  | "pir_motion";
+  | "pir_motion"
+  | "touch_pad"
+  | "ultrasonic_near"
+  | "temp_high";
 
 export interface MicrobitSimRule {
   trigger: MicrobitTrigger;
@@ -83,6 +109,7 @@ export interface MicrobitChatMessage {
 export interface MicrobitProject {
   id: string;
   name: string;
+  board_id?: BoardId;
   description: string;
   attachments: MicrobitAttachment[];
   sim_rules?: MicrobitSimRule[];
@@ -95,12 +122,8 @@ export interface MicrobitProject {
 
 export interface MicrobitCatalog {
   ok: boolean;
-  board: {
-    name: string;
-    mcu: string;
-    sensors: string[];
-    wireless: string[];
-  };
+  board: BoardProfile;
+  boards?: Record<BoardId, BoardProfile>;
   pins: MicrobitPinSpec[];
   accessories: MicrobitAccessorySpec[];
   templates: Array<{ id: string; name: string; code: string }>;
@@ -155,6 +178,7 @@ export async function listMicrobitProjects(): Promise<{ projects: MicrobitProjec
 export async function createMicrobitProject(payload: {
   name: string;
   description?: string;
+  board_id?: BoardId;
 }): Promise<{ project: MicrobitProject }> {
   return mbReq("/api/microbit/projects", {
     method: "POST",
@@ -167,6 +191,7 @@ export async function updateMicrobitProject(
   projectId: string,
   payload: Partial<{
     name: string;
+    board_id: BoardId;
     description: string;
     attachments: MicrobitAttachment[];
     code: string;

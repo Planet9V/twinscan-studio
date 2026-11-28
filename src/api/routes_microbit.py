@@ -18,6 +18,7 @@ from src.microbit.bridge import (
 )
 from src.microbit.catalog import (
     ACCESSORY_BY_ID,
+    BOARD_PROFILES,
     MICROBIT_ACCESSORIES,
     MICROBIT_V2_PINS,
     STARTER_TEMPLATES,
@@ -41,26 +42,28 @@ def _get_store(request: Request) -> MicrobitProjectStore:
 
 
 class CreateMicrobitProjectRequest(BaseModel):
-    """Create a new micro:bit v2.2 prototype project."""
+    """Create a new multi-board hardware prototype project."""
 
     name: str = Field(..., min_length=1, max_length=96)
     description: str = Field(default="", max_length=240)
+    board_id: str = Field(default="microbit_v2", max_length=32)
 
 
 class AttachmentItem(BaseModel):
-    """Accessory attached to specific micro:bit v2.2 pins."""
+    """Accessory attached to specific board pins."""
 
     id: Optional[str] = Field(default=None, max_length=32)
     accessory_id: str = Field(..., max_length=48)
     label: Optional[str] = Field(default=None, max_length=80)
-    pin: str = Field(default="P0", max_length=12)
-    secondary_pin: Optional[str] = Field(default=None, max_length=12)
+    pin: str = Field(default="P0", max_length=16)
+    secondary_pin: Optional[str] = Field(default=None, max_length=16)
 
 
 class UpdateMicrobitProjectRequest(BaseModel):
-    """Update a micro:bit project's metadata, attached accessories, sim_rules, or MicroPython code."""
+    """Update a hardware project's board, metadata, attached accessories, sim_rules, or code."""
 
     name: Optional[str] = Field(default=None, min_length=1, max_length=96)
+    board_id: Optional[str] = Field(default=None, max_length=32)
     description: Optional[str] = Field(default=None, max_length=240)
     attachments: Optional[List[AttachmentItem]] = Field(default=None)
     sim_rules: Optional[List[Dict[str, Any]]] = Field(default=None)
@@ -82,15 +85,11 @@ class DeployCodeRequest(BaseModel):
 
 @router.get("/catalog")
 async def get_microbit_catalog() -> Dict[str, Any]:
-    """Return micro:bit v2.2 pinout schematics, accessory library, and starter templates."""
+    """Return multi-board pinout schematics, Hiwonder + prototyping library, and templates."""
     return {
         "ok": True,
-        "board": {
-            "name": "BBC micro:bit v2.2",
-            "mcu": "Nordic nRF52833 (ARM Cortex-M4F @ 64MHz, 512KB Flash, 128KB RAM)",
-            "sensors": ["3-axis Accelerometer & Compass (LSM303)", "MEMS Microphone", "Onboard Speaker", "Touch Logo", "Temp & Light"],
-            "wireless": ["2.4 GHz Radio", "Bluetooth 5.1 Low Energy"],
-        },
+        "board": BOARD_PROFILES["microbit_v2"],
+        "boards": BOARD_PROFILES,
         "pins": MICROBIT_V2_PINS,
         "accessories": MICROBIT_ACCESSORIES,
         "templates": STARTER_TEMPLATES,
@@ -99,15 +98,19 @@ async def get_microbit_catalog() -> Dict[str, Any]:
 
 @router.get("/projects")
 async def list_microbit_projects(request: Request) -> Dict[str, Any]:
-    """List all saved micro:bit v2.2 prototype projects."""
+    """List all saved hardware prototype projects."""
     projects = _get_store(request).list_projects()
     return {"ok": True, "projects": projects, "count": len(projects)}
 
 
 @router.post("/projects")
 async def create_microbit_project(request: Request, payload: CreateMicrobitProjectRequest) -> Dict[str, Any]:
-    """Create a new micro:bit v2.2 prototype project."""
-    proj = _get_store(request).create_project(name=payload.name, description=payload.description)
+    """Create a new hardware prototype project for micro:bit v2.2, Raspberry Pi 5, or PuppyPi Pro."""
+    proj = _get_store(request).create_project(
+        name=payload.name,
+        description=payload.description,
+        board_id=payload.board_id,
+    )
     return {"ok": True, "project": proj}
 
 
@@ -117,13 +120,15 @@ async def update_microbit_project(
     project_id: str,
     payload: UpdateMicrobitProjectRequest,
 ) -> Dict[str, Any]:
-    """Update a micro:bit project's attached accessories, pins, or MicroPython code."""
+    """Update a hardware project's target board, attached accessories, pins, or code."""
     store = _get_store(request)
     proj = store.get_project(project_id)
     if proj is None:
         raise HTTPException(status_code=404, detail="micro:bit project not found.")
     if payload.name is not None:
         proj["name"] = payload.name.strip()
+    if payload.board_id is not None and payload.board_id in BOARD_PROFILES:
+        proj["board_id"] = payload.board_id
     if payload.description is not None:
         proj["description"] = payload.description.strip()
     if payload.attachments is not None:
@@ -207,7 +212,11 @@ async def generate_project_code(request: Request, project_id: str) -> Dict[str, 
     proj = store.get_project(project_id)
     if proj is None:
         raise HTTPException(status_code=404, detail="micro:bit project not found.")
-    code = generate_prototype_code(proj.get("attachments") or [], project_name=proj.get("name") or "Prototype")
+    code = generate_prototype_code(
+        proj.get("attachments") or [],
+        project_name=proj.get("name") or "Prototype",
+        board_id=str(proj.get("board_id") or "microbit_v2"),
+    )
     proj["code"] = code
     saved = store.save_project(proj)
     return {"ok": True, "code": code, "project": saved}

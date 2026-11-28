@@ -9,6 +9,8 @@ import {
   CheckCircle2,
   Code2,
   Cpu,
+  GripVertical,
+  HelpCircle,
   Loader2,
   Play,
   Plus,
@@ -41,6 +43,7 @@ import {
   readMicrobitSensors,
   runMicrobitSelfTest,
   updateMicrobitProject,
+  type BoardId,
   type MicrobitAccessorySpec,
   type MicrobitAttachment,
   type MicrobitCatalog,
@@ -163,6 +166,8 @@ export function MicrobitLabStudio(): React.JSX.Element {
 
   const [newProjOpen, setNewProjOpen] = useState(false);
   const [newProjName, setNewProjName] = useState("Smart Desk Prototype");
+  const [dragOverCanvas, setDragOverCanvas] = useState(false);
+  const [infoAccId, setInfoAccId] = useState<string | null>(null);
 
   const hydrate = useCallback(async (selectId?: string) => {
     try {
@@ -271,8 +276,12 @@ export function MicrobitLabStudio(): React.JSX.Element {
 
   const handleAttachAccessory = async (acc: MicrobitAccessorySpec) => {
     if (!project) return;
+    const activeBoardId: BoardId = project.board_id || "microbit_v2";
+    const boardDef = acc.default_pins_by_board?.[activeBoardId];
     const used = new Set(project.wiring.used_pins);
-    const freePin = acc.allowed_signal_pins.find((p) => !used.has(p)) || acc.default_pin;
+    const freePin =
+      boardDef?.pin || acc.allowed_signal_pins.find((p) => !used.has(p)) || acc.default_pin;
+    const secPin = boardDef?.secondary_pin !== undefined ? boardDef.secondary_pin : acc.secondary_pin;
     const next: MicrobitAttachment[] = [
       ...project.attachments,
       {
@@ -280,16 +289,29 @@ export function MicrobitLabStudio(): React.JSX.Element {
         accessory_id: acc.id,
         label: acc.name,
         pin: freePin,
-        secondary_pin: acc.secondary_pin,
+        secondary_pin: secPin,
       },
     ];
     try {
       const res = await updateMicrobitProject(project.id, { attachments: next });
       setProject(res.project);
       setSelectedPinId(freePin);
-      setNotice(`Attached ${acc.name} on ${freePin} — see 3D jumper wires & wiring checklist!`);
+      setNotice(`Attached ${acc.name} on ${freePin} — check 3D jumper wires & safety notes!`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed attaching part.");
+    }
+  };
+
+  const handleSwitchBoard = async (nextBoard: BoardId) => {
+    if (!project || project.board_id === nextBoard) return;
+    try {
+      const res = await updateMicrobitProject(project.id, { board_id: nextBoard });
+      setProject(res.project);
+      const firstPin = catalog?.boards?.[nextBoard]?.pins?.[0]?.id || "P0";
+      setSelectedPinId(firstPin);
+      setNotice(`Switched 3D Prototyping Board to ${catalog?.boards?.[nextBoard]?.name || nextBoard}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed switching board.");
     }
   };
 
@@ -371,7 +393,10 @@ export function MicrobitLabStudio(): React.JSX.Element {
     );
   }
 
-  const selectedPin = catalog.pins.find((p) => p.id === selectedPinId) || catalog.pins[0];
+  const activeBoardId: BoardId = project.board_id || "microbit_v2";
+  const activeBoardProfile = catalog.boards?.[activeBoardId] || catalog.board;
+  const activePins = activeBoardProfile.pins || catalog.pins;
+  const selectedPin = activePins.find((p) => p.id === selectedPinId) || activePins[0];
 
   return (
     <div className="space-y-4">
@@ -381,10 +406,35 @@ export function MicrobitLabStudio(): React.JSX.Element {
           <div className="flex flex-wrap items-center gap-2.5">
             <Cpu className="h-5 w-5 text-amber-400" />
             <div>
-              <h1 className="text-sm font-semibold text-white">BBC micro:bit v2.2 AI Co-Pilot &amp; 3D Lab</h1>
+              <h1 className="text-sm font-semibold text-white">Universal 3D Hardware Lab &amp; AI Co-Pilot</h1>
               <p className="text-[11px] text-slate-400">
-                Chat → Simulate live in 3D Twin → Deploy to real micro:bit v2.2
+                {activeBoardProfile.name} · {activeBoardProfile.language}
               </p>
+            </div>
+
+            {/* Multi-Board Switcher */}
+            <div className="flex items-center rounded-md border border-white/10 bg-slate-900 p-0.5">
+              {(
+                [
+                  { id: "microbit_v2", label: "micro:bit v2.2" },
+                  { id: "rpi5_16gb", label: "Raspberry Pi 5" },
+                  { id: "puppypi_pro", label: "PuppyPi + LiDAR" },
+                ] as Array<{ id: BoardId; label: string }>
+              ).map((b) => (
+                <button
+                  key={b.id}
+                  type="button"
+                  onClick={() => void handleSwitchBoard(b.id)}
+                  className={cn(
+                    "rounded px-2 py-1 text-[11px] font-medium transition-colors cursor-pointer",
+                    activeBoardId === b.id
+                      ? "bg-cyan-600 text-white"
+                      : "text-slate-400 hover:text-slate-200"
+                  )}
+                >
+                  {b.label}
+                </button>
+              ))}
             </div>
 
             <select
@@ -485,6 +535,12 @@ export function MicrobitLabStudio(): React.JSX.Element {
                   <span>{c}</span>
                 </div>
               ))}
+              {project.wiring.warnings.map((w, idx) => (
+                <div key={`warn_${idx}`} className="flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-950/40 p-2 text-[11px] text-amber-200">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+                  <span>{w}</span>
+                </div>
+              ))}
               {project.attachments.map((att) => {
                 const spec = catalog.accessories.find((a) => a.id === att.accessory_id);
                 return (
@@ -532,30 +588,76 @@ export function MicrobitLabStudio(): React.JSX.Element {
 
           <Card className="border-white/10 bg-slate-950/90">
             <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-1.5 text-xs font-semibold text-cyan-300">
-                <Plus className="h-3.5 w-3.5" /> Parts Library
+              <CardTitle className="flex items-center justify-between text-xs font-semibold text-cyan-300">
+                <span className="flex items-center gap-1.5">
+                  <Plus className="h-3.5 w-3.5" /> Hiwonder &amp; Parts Library
+                </span>
+                <span className="text-[10px] font-normal text-slate-400">Drag onto 3D</span>
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-1.5">
-              {catalog.accessories.map((acc) => (
-                <div
-                  key={acc.id}
-                  className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-slate-900/60 px-2.5 py-1.5"
-                >
-                  <div className="min-w-0">
-                    <div className="truncate text-[11px] font-medium text-slate-100">{acc.name}</div>
-                    <div className="truncate text-[10px] text-slate-400">{acc.summary}</div>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void handleAttachAccessory(acc)}
-                    className="h-6 shrink-0 px-2 text-[10px] cursor-pointer"
+            <CardContent className="max-h-[420px] space-y-1.5 overflow-y-auto">
+              {catalog.accessories.map((acc) => {
+                const expanded = infoAccId === acc.id;
+                return (
+                  <div
+                    key={acc.id}
+                    draggable
+                    onDragStart={(e) => {
+                      e.dataTransfer.setData("text/plain", acc.id);
+                      e.dataTransfer.effectAllowed = "copy";
+                    }}
+                    className="rounded-lg border border-white/10 bg-slate-900/60 px-2.5 py-1.5 transition-colors hover:border-cyan-500/40 cursor-grab active:cursor-grabbing"
                   >
-                    + Add
-                  </Button>
-                </div>
-              ))}
+                    <div className="flex items-center justify-between gap-1.5">
+                      <div className="flex min-w-0 items-center gap-1.5">
+                        <GripVertical className="h-3.5 w-3.5 shrink-0 text-slate-500" />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate text-[11px] font-medium text-slate-100">{acc.name}</span>
+                            {acc.requires_5v && (
+                              <span className="rounded bg-amber-500/20 px-1 font-mono text-[9px] text-amber-300">
+                                5V
+                              </span>
+                            )}
+                          </div>
+                          <div className="truncate text-[10px] text-slate-400">{acc.summary}</div>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setInfoAccId(expanded ? null : acc.id)}
+                          title="Specs & How It Works"
+                          className="rounded p-1 text-slate-400 hover:bg-white/10 hover:text-cyan-300 cursor-pointer"
+                        >
+                          <HelpCircle className="h-3.5 w-3.5" />
+                        </button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => void handleAttachAccessory(acc)}
+                          className="h-6 px-2 text-[10px] cursor-pointer"
+                        >
+                          + Add
+                        </Button>
+                      </div>
+                    </div>
+                    {expanded && (
+                      <div className="mt-2 space-y-1 border-t border-white/10 pt-2 text-[10px] text-slate-300">
+                        {acc.ic && (
+                          <div>
+                            <strong className="text-cyan-300">IC / Bus:</strong> {acc.ic} ({acc.protocol})
+                          </div>
+                        )}
+                        {acc.how_it_works && <div>{acc.how_it_works}</div>}
+                        <div className="text-amber-200/90">
+                          <strong>Wiring Note:</strong> {acc.power_note}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </CardContent>
           </Card>
         </div>
@@ -596,10 +698,28 @@ export function MicrobitLabStudio(): React.JSX.Element {
               </div>
             </CardHeader>
             <CardContent className="p-0">
-              <div className="h-[390px] w-full bg-[#050914]">
+              <div
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragOverCanvas(true);
+                }}
+                onDragLeave={() => setDragOverCanvas(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragOverCanvas(false);
+                  const accId = e.dataTransfer.getData("text/plain");
+                  const found = catalog.accessories.find((a) => a.id === accId);
+                  if (found) void handleAttachAccessory(found);
+                }}
+                className={cn(
+                  "relative h-[390px] w-full bg-[#050914] transition-all",
+                  dragOverCanvas && "ring-2 ring-inset ring-cyan-400"
+                )}
+              >
                 <Microbit3DCanvas
                   ref={canvasRef}
-                  pins={catalog.pins}
+                  boardId={activeBoardId}
+                  pins={activePins}
                   accessories={catalog.accessories}
                   attachments={project.attachments}
                   selectedPinId={selectedPinId}
@@ -611,6 +731,13 @@ export function MicrobitLabStudio(): React.JSX.Element {
                   onSelectPin={(pid) => setSelectedPinId(pid)}
                   onVirtualTrigger={handleVirtualTrigger}
                 />
+                {dragOverCanvas && (
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-cyan-950/40 backdrop-blur-[1px]">
+                    <span className="rounded-full border border-cyan-400 bg-slate-950/90 px-4 py-1.5 text-xs font-semibold text-cyan-200 shadow-lg">
+                      Drop to Attach Component &amp; Auto-Wire 3D Jumpers
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Virtual Event Simulator Test Bar */}
@@ -623,12 +750,12 @@ export function MicrobitLabStudio(): React.JSX.Element {
                     [
                       { id: "button_a", label: "Btn A (Left)" },
                       { id: "button_b", label: "Btn B (Right)" },
-                      { id: "logo_touch", label: "Touch Logo" },
+                      { id: "logo_touch", label: "Logo" },
                       { id: "lift", label: "Lift Up" },
-                      { id: "tilt_left", label: "Tilt Left" },
-                      { id: "tilt_right", label: "Tilt Right" },
                       { id: "shake", label: "Shake" },
-                      { id: "pir_motion", label: "Motion" },
+                      { id: "touch_pad", label: "Hiwonder Touch" },
+                      { id: "ultrasonic_near", label: "Ultrasonic <20cm" },
+                      { id: "temp_high", label: "Temp High" },
                     ] as Array<{ id: MicrobitTrigger; label: string }>
                   ).map((t) => {
                     const hasRule = (project.sim_rules || []).some((r) => r.trigger === t.id);
@@ -663,7 +790,7 @@ export function MicrobitLabStudio(): React.JSX.Element {
                   Pin Schematic — {selectedPin.label}
                 </CardTitle>
                 <div className="flex flex-wrap gap-1">
-                  {catalog.pins.map((p) => (
+                  {activePins.map((p) => (
                     <button
                       key={p.id}
                       type="button"

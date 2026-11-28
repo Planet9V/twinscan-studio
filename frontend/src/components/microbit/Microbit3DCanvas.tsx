@@ -4,6 +4,7 @@ import React, { useEffect, useImperativeHandle, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type {
+  BoardId,
   MicrobitAccessorySpec,
   MicrobitAttachment,
   MicrobitLiveSensors,
@@ -17,6 +18,7 @@ export interface Microbit3DHandle {
 }
 
 interface Microbit3DCanvasProps {
+  boardId?: BoardId;
   pins: MicrobitPinSpec[];
   accessories: MicrobitAccessorySpec[];
   attachments: MicrobitAttachment[];
@@ -107,9 +109,112 @@ function makeAccessory3D(spec: MicrobitAccessorySpec, neopixelHex: string): {
   group: THREE.Group;
   servoHorn?: THREE.Group;
   neopixelMats?: THREE.MeshStandardMaterial[];
+  clickableTrigger?: THREE.Object3D;
 } {
   const g = new THREE.Group();
   const baseColor = new THREE.Color(spec.color_hex || "#38bdf8");
+
+  if (spec.id === "hiwonder_led_matrix_8x16") {
+    const pcb = new THREE.Mesh(
+      new THREE.BoxGeometry(2.6, 1.35, 0.16),
+      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.45 })
+    );
+    g.add(pcb);
+    const mats: THREE.MeshStandardMaterial[] = [];
+    const col = new THREE.Color(neopixelHex || "#ef4444");
+    for (let r = 0; r < 6; r++) {
+      for (let c = 0; c < 12; c++) {
+        const lit = (r === 1 && (c === 3 || c === 8)) || (r === 4 && c >= 3 && c <= 8) || (r === 3 && (c === 2 || c === 9));
+        const m = new THREE.MeshStandardMaterial({
+          color: lit ? col : 0x331118,
+          emissive: lit ? col : 0x000000,
+          emissiveIntensity: lit ? 1.2 : 0,
+        });
+        if (lit) mats.push(m);
+        const dot = new THREE.Mesh(new THREE.BoxGeometry(0.11, 0.11, 0.06), m);
+        dot.position.set(-1.08 + c * 0.195, 0.48 - r * 0.19, 0.09);
+        g.add(dot);
+      }
+    }
+    return { group: g, neopixelMats: mats };
+  }
+
+  if (spec.id === "hiwonder_ultrasonic_v56") {
+    const pcb = new THREE.Mesh(
+      new THREE.BoxGeometry(1.9, 0.95, 0.16),
+      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.4 })
+    );
+    g.add(pcb);
+    const mats: THREE.MeshStandardMaterial[] = [];
+    const ringCol = new THREE.Color(neopixelHex || "#10b981");
+    for (const sx of [-0.5, 0.5]) {
+      const cyl = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.34, 0.34, 0.42, 20),
+        new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.8, roughness: 0.2 })
+      );
+      cyl.rotation.x = Math.PI / 2;
+      cyl.position.set(sx, 0, 0.22);
+      const ringMat = new THREE.MeshStandardMaterial({
+        color: ringCol,
+        emissive: ringCol,
+        emissiveIntensity: 1.3,
+      });
+      mats.push(ringMat);
+      const ring = new THREE.Mesh(new THREE.TorusGeometry(0.35, 0.05, 10, 24), ringMat);
+      ring.position.set(sx, 0, 0.38);
+      g.add(cyl, ring);
+    }
+    return { group: g, neopixelMats: mats };
+  }
+
+  if (spec.id === "hiwonder_temp_hum_v11") {
+    const pcb = new THREE.Mesh(
+      new THREE.BoxGeometry(1.5, 0.9, 0.14),
+      new THREE.MeshStandardMaterial({ color: 0x0369a1, roughness: 0.45 })
+    );
+    const chip = new THREE.Mesh(
+      new THREE.BoxGeometry(0.45, 0.45, 0.14),
+      new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.7, roughness: 0.25 })
+    );
+    chip.position.set(0.25, 0, 0.1);
+    const ph20 = new THREE.Mesh(
+      new THREE.BoxGeometry(0.42, 0.28, 0.24),
+      new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.5 })
+    );
+    ph20.position.set(-0.45, 0, 0.12);
+    g.add(pcb, chip, ph20);
+    return { group: g };
+  }
+
+  if (spec.id === "hiwonder_touch_sensor") {
+    const pcb = new THREE.Mesh(
+      new THREE.BoxGeometry(1.8, 0.78, 0.14),
+      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.4 })
+    );
+    const pad = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.32, 0.32, 0.06, 24),
+      new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.85, roughness: 0.2, emissive: 0xd97706, emissiveIntensity: 0.35 })
+    );
+    pad.rotation.x = Math.PI / 2;
+    pad.position.set(0.35, 0, 0.09);
+    pad.userData = { virtualTrigger: "touch_pad" as MicrobitTrigger };
+    g.add(pcb, pad);
+    return { group: g, clickableTrigger: pad };
+  }
+
+  if (spec.id === "ld19_lidar") {
+    const base = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.58, 0.62, 0.32, 24),
+      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.35 })
+    );
+    const turret = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.48, 0.52, 0.28, 24),
+      new THREE.MeshStandardMaterial({ color: 0x06b6d4, metalness: 0.5, roughness: 0.25 })
+    );
+    turret.position.y = 0.3;
+    g.add(base, turret);
+    return { group: g };
+  }
 
   if (spec.id === "sg90_servo") {
     const body = new THREE.Mesh(
@@ -218,6 +323,7 @@ function makeAccessory3D(spec: MicrobitAccessorySpec, neopixelHex: string): {
 export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCanvasProps>(
   function Microbit3DCanvas(
     {
+      boardId = "microbit_v2",
       pins,
       accessories,
       attachments,
@@ -353,131 +459,187 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
       boardGroupRef.current = board;
       scene.add(board);
 
-      const pcb = new THREE.Mesh(
-        new THREE.BoxGeometry(5.2, 4.2, 0.16),
-        new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.42, metalness: 0.25 })
-      );
-      board.add(pcb);
-      board.add(
-        new THREE.LineSegments(
-          new THREE.EdgesGeometry(new THREE.BoxGeometry(5.22, 4.22, 0.17)),
-          new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.35 })
-        )
-      );
-
-      // FRONT: Dynamic 5x5 Red LED Matrix
-      const ledGrid: THREE.Mesh[][] = [];
-      for (let r = 0; r < 5; r++) {
-        const row: THREE.Mesh[] = [];
-        for (let c = 0; c < 5; c++) {
-          const lit = LED_ICONS.HAPPY[r][c] === 1;
-          const led = new THREE.Mesh(
-            new THREE.BoxGeometry(0.14, 0.26, 0.06),
-            new THREE.MeshStandardMaterial({
-              color: lit ? 0xff2a3c : 0x331118,
-              emissive: lit ? 0xff1e32 : 0x000000,
-              emissiveIntensity: lit ? 1.5 : 0,
-            })
-          );
-          led.position.set((c - 2) * 0.42, (2 - r) * 0.42 + 0.15, 0.1);
-          board.add(led);
-          row.push(led);
-        }
-        ledGrid.push(row);
-      }
-      ledMeshesRef.current = ledGrid;
-
       interactiveMeshesRef.current = [];
+      pinMeshesRef.current.clear();
+      ledMeshesRef.current = [];
 
-      // FRONT: Clickable Button A (left) & Button B (right)
-      const btns: Array<{ x: number; trigger: MicrobitTrigger }> = [
-        { x: -1.85, trigger: "button_a" },
-        { x: 1.85, trigger: "button_b" },
-      ];
-      for (const b of btns) {
-        const housing = new THREE.Mesh(
-          new THREE.BoxGeometry(0.66, 0.66, 0.12),
-          new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.4 })
+      if (boardId === "rpi5_16gb") {
+        // Raspberry Pi 5 16GB PCB (emerald green + 40-pin GPIO + USB 3.0 + Ethernet + BCM2712 heatsink)
+        const pcb = new THREE.Mesh(
+          new THREE.BoxGeometry(6.2, 4.1, 0.18),
+          new THREE.MeshStandardMaterial({ color: 0x065f46, roughness: 0.42, metalness: 0.2 })
         );
-        housing.position.set(b.x, 0.15, 0.12);
-        housing.userData = { virtualTrigger: b.trigger };
-        const cap = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.22, 0.22, 0.16, 16),
-          new THREE.MeshStandardMaterial({ color: 0x020617, roughness: 0.3 })
+        board.add(pcb);
+        const cpu = new THREE.Mesh(
+          new THREE.BoxGeometry(1.4, 1.4, 0.35),
+          new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.85, roughness: 0.25 })
         );
-        cap.rotation.x = Math.PI / 2;
-        cap.position.set(b.x, 0.15, 0.19);
-        cap.userData = { virtualTrigger: b.trigger };
-        board.add(housing, cap);
-        interactiveMeshesRef.current.push(housing, cap);
+        cpu.position.set(-0.3, 0.1, 0.24);
+        const eth = new THREE.Mesh(
+          new THREE.BoxGeometry(1.15, 0.95, 0.85),
+          new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.85, roughness: 0.2 })
+        );
+        eth.position.set(2.55, -1.1, 0.5);
+        const usb1 = new THREE.Mesh(
+          new THREE.BoxGeometry(1.0, 0.82, 0.82),
+          new THREE.MeshStandardMaterial({ color: 0x2563eb, metalness: 0.4, roughness: 0.3 })
+        );
+        usb1.position.set(2.55, 0.2, 0.48);
+        const usb2 = usb1.clone();
+        usb2.position.set(2.55, 1.25, 0.48);
+        board.add(cpu, eth, usb1, usb2);
+
+        // 40-pin GPIO header along bottom edge for clean jumper routing
+        const header = new THREE.Mesh(
+          new THREE.BoxGeometry(4.4, 0.48, 0.35),
+          new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.5 })
+        );
+        header.position.set(-0.4, -1.78, 0.22);
+        board.add(header);
+      } else if (boardId === "puppypi_pro") {
+        // PuppyPi Pro Quadruped Proof-of-Concept + LD19 LiDAR Turret + WonderEcho AI Box
+        const chassis = new THREE.Mesh(
+          new THREE.BoxGeometry(4.6, 1.4, 2.4),
+          new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.38, metalness: 0.35 })
+        );
+        board.add(chassis);
+        const topDeck = new THREE.Mesh(
+          new THREE.BoxGeometry(4.4, 0.14, 2.2),
+          new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.35, metalness: 0.4 })
+        );
+        topDeck.position.y = 0.75;
+        const lidarTurret = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.62, 0.68, 0.48, 24),
+          new THREE.MeshStandardMaterial({ color: 0x06b6d4, metalness: 0.6, roughness: 0.25 })
+        );
+        lidarTurret.position.set(0.8, 1.12, 0);
+        const aiBox = new THREE.Mesh(
+          new THREE.BoxGeometry(1.2, 0.48, 0.9),
+          new THREE.MeshStandardMaterial({ color: 0x7c3aed, roughness: 0.35 })
+        );
+        aiBox.position.set(-1.1, 1.06, 0);
+        board.add(topDeck, lidarTurret, aiBox);
+        // 4 legs
+        for (const [lx, lz] of [[-1.6, 1.05], [1.6, 1.05], [-1.6, -1.05], [1.6, -1.05]]) {
+          const leg = new THREE.Mesh(
+            new THREE.BoxGeometry(0.32, 1.5, 0.26),
+            new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.5, roughness: 0.35 })
+          );
+          leg.position.set(lx, -1.1, lz);
+          board.add(leg);
+        }
+      } else {
+        // Default: BBC micro:bit v2.2 PCB
+        const pcb = new THREE.Mesh(
+          new THREE.BoxGeometry(5.2, 4.2, 0.16),
+          new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.42, metalness: 0.25 })
+        );
+        board.add(pcb);
+        board.add(
+          new THREE.LineSegments(
+            new THREE.EdgesGeometry(new THREE.BoxGeometry(5.22, 4.22, 0.17)),
+            new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.35 })
+          )
+        );
+
+        const ledGrid: THREE.Mesh[][] = [];
+        for (let r = 0; r < 5; r++) {
+          const row: THREE.Mesh[] = [];
+          for (let c = 0; c < 5; c++) {
+            const lit = LED_ICONS.HAPPY[r][c] === 1;
+            const led = new THREE.Mesh(
+              new THREE.BoxGeometry(0.14, 0.26, 0.06),
+              new THREE.MeshStandardMaterial({
+                color: lit ? 0xff2a3c : 0x331118,
+                emissive: lit ? 0xff1e32 : 0x000000,
+                emissiveIntensity: lit ? 1.5 : 0,
+              })
+            );
+            led.position.set((c - 2) * 0.42, (2 - r) * 0.42 + 0.15, 0.1);
+            board.add(led);
+            row.push(led);
+          }
+          ledGrid.push(row);
+        }
+        ledMeshesRef.current = ledGrid;
+
+        const btns: Array<{ x: number; trigger: MicrobitTrigger }> = [
+          { x: -1.85, trigger: "button_a" },
+          { x: 1.85, trigger: "button_b" },
+        ];
+        for (const b of btns) {
+          const housing = new THREE.Mesh(
+            new THREE.BoxGeometry(0.66, 0.66, 0.12),
+            new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.4 })
+          );
+          housing.position.set(b.x, 0.15, 0.12);
+          housing.userData = { virtualTrigger: b.trigger };
+          const cap = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.22, 0.22, 0.16, 16),
+            new THREE.MeshStandardMaterial({ color: 0x020617, roughness: 0.3 })
+          );
+          cap.rotation.x = Math.PI / 2;
+          cap.position.set(b.x, 0.15, 0.19);
+          cap.userData = { virtualTrigger: b.trigger };
+          board.add(housing, cap);
+          interactiveMeshesRef.current.push(housing, cap);
+        }
+
+        const logo = new THREE.Mesh(
+          new THREE.BoxGeometry(1.15, 0.54, 0.06),
+          new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.85, roughness: 0.22 })
+        );
+        logo.position.set(0, 1.55, 0.09);
+        logo.userData = { virtualTrigger: "logo_touch" as MicrobitTrigger };
+        board.add(logo);
+        interactiveMeshesRef.current.push(logo);
+
+        const micLed = new THREE.Mesh(
+          new THREE.SphereGeometry(0.08, 12, 12),
+          new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0xef4444, emissiveIntensity: 0.9 })
+        );
+        micLed.position.set(1.25, 1.55, 0.11);
+        const mcu = new THREE.Mesh(
+          new THREE.BoxGeometry(0.75, 0.75, 0.09),
+          new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.3, metalness: 0.4 })
+        );
+        mcu.position.set(-1.1, 0.2, -0.11);
+        const speakerBox = new THREE.Mesh(
+          new THREE.BoxGeometry(0.95, 0.95, 0.24),
+          new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.35 })
+        );
+        speakerBox.position.set(0.35, 0.15, -0.18);
+        const speakerCone = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.32, 0.32, 0.05, 20),
+          new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8, roughness: 0.2 })
+        );
+        speakerCone.rotation.x = Math.PI / 2;
+        speakerCone.position.set(0.35, 0.15, -0.31);
+        const usbPort = new THREE.Mesh(
+          new THREE.BoxGeometry(0.75, 0.48, 0.28),
+          new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.85, roughness: 0.2 })
+        );
+        usbPort.position.set(0, 1.92, -0.2);
+        const jstPort = new THREE.Mesh(
+          new THREE.BoxGeometry(0.68, 0.56, 0.42),
+          new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.5 })
+        );
+        jstPort.position.set(1.55, 1.78, -0.26);
+        board.add(micLed, mcu, speakerBox, speakerCone, usbPort, jstPort);
       }
 
-      // FRONT: Clickable Gold Capacitive Touch Logo
-      const logo = new THREE.Mesh(
-        new THREE.BoxGeometry(1.15, 0.54, 0.06),
-        new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.85, roughness: 0.22 })
-      );
-      logo.position.set(0, 1.55, 0.09);
-      logo.userData = { virtualTrigger: "logo_touch" as MicrobitTrigger };
-      board.add(logo);
-      interactiveMeshesRef.current.push(logo);
-
-      // MEMS Mic LED + Back MCU/Speaker/Ports
-      const micLed = new THREE.Mesh(
-        new THREE.SphereGeometry(0.08, 12, 12),
-        new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0xef4444, emissiveIntensity: 0.9 })
-      );
-      micLed.position.set(1.25, 1.55, 0.11);
-      board.add(micLed);
-
-      const mcu = new THREE.Mesh(
-        new THREE.BoxGeometry(0.75, 0.75, 0.09),
-        new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.3, metalness: 0.4 })
-      );
-      mcu.position.set(-1.1, 0.2, -0.11);
-      const speakerBox = new THREE.Mesh(
-        new THREE.BoxGeometry(0.95, 0.95, 0.24),
-        new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.35 })
-      );
-      speakerBox.position.set(0.35, 0.15, -0.18);
-      const speakerCone = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.32, 0.32, 0.05, 20),
-        new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8, roughness: 0.2 })
-      );
-      speakerCone.rotation.x = Math.PI / 2;
-      speakerCone.position.set(0.35, 0.15, -0.31);
-      const usbPort = new THREE.Mesh(
-        new THREE.BoxGeometry(0.75, 0.48, 0.28),
-        new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.85, roughness: 0.2 })
-      );
-      usbPort.position.set(0, 1.92, -0.2);
-      const jstPort = new THREE.Mesh(
-        new THREE.BoxGeometry(0.68, 0.56, 0.42),
-        new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.5 })
-      );
-      jstPort.position.set(1.55, 1.78, -0.26);
-      board.add(mcu, speakerBox, speakerCone, usbPort, jstPort);
-
-      // Edge Connector Pins
-      pinMeshesRef.current.clear();
-      const allPads = [
-        { id: "P0", x: -1.75, w: 0.54, h: 0.68, y: -1.78, c: 0xeab308 },
-        { id: "P1", x: -0.875, w: 0.54, h: 0.68, y: -1.78, c: 0xeab308 },
-        { id: "P2", x: 0.0, w: 0.54, h: 0.68, y: -1.78, c: 0xeab308 },
-        { id: "3V", x: 0.875, w: 0.54, h: 0.68, y: -1.78, c: 0xeab308 },
-        { id: "GND", x: 1.75, w: 0.54, h: 0.68, y: -1.78, c: 0xeab308 },
-        { id: "P8", x: -1.3, w: 0.14, h: 0.52, y: -1.84, c: 0xd97706 },
-        { id: "P12", x: -0.42, w: 0.14, h: 0.52, y: -1.84, c: 0xd97706 },
-        { id: "P13", x: 0.42, w: 0.14, h: 0.52, y: -1.84, c: 0xd97706 },
-        { id: "P19", x: 1.28, w: 0.14, h: 0.52, y: -1.84, c: 0xd97706 },
-        { id: "P20", x: 1.48, w: 0.14, h: 0.52, y: -1.84, c: 0xd97706 },
-      ];
-      for (const p of allPads) {
+      // Dynamic Clickable Pin Pads for whichever board is active
+      for (const p of pins) {
+        const isBig = p.pad_type === "ring" || boardId !== "microbit_v2";
         const pad = new THREE.Mesh(
-          new THREE.BoxGeometry(p.w, p.h, 0.19),
-          new THREE.MeshStandardMaterial({ color: p.c, metalness: 0.85, roughness: 0.22 })
+          new THREE.BoxGeometry(isBig ? 0.36 : 0.14, isBig ? 0.52 : 0.44, 0.22),
+          new THREE.MeshStandardMaterial({
+            color: p.pad_type === "power" ? 0xef4444 : p.pad_type === "ground" ? 0x475569 : 0xeab308,
+            metalness: 0.8,
+            roughness: 0.25,
+          })
         );
-        pad.position.set(p.x, p.y, 0);
+        pad.position.set((p.x_mm || 0) / 10, -1.78, boardId === "rpi5_16gb" ? 0.24 : 0);
         pad.userData = { pinId: p.id };
         board.add(pad);
         pinMeshesRef.current.set(p.id, pad);
@@ -561,7 +723,7 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
         controls.dispose();
         renderer.dispose();
       };
-    }, []);
+    }, [boardId, pins]);
 
     useEffect(() => {
       pinMeshesRef.current.forEach((mesh, pid) => {
@@ -599,6 +761,7 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
         group.add(built.group);
         if (built.servoHorn) servoHornsRef.current.push(built.servoHorn);
         if (built.neopixelMats) neopixelMatsRef.current.push(...built.neopixelMats);
+        if (built.clickableTrigger) interactiveMeshesRef.current.push(built.clickableTrigger);
 
         spec.wires.forEach((wire, wIdx) => {
           const targetPinId =

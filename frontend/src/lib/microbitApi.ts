@@ -29,6 +29,11 @@ export interface BoardProfile {
   pins: MicrobitPinSpec[];
   sensors: string[];
   wireless: string[];
+  dimensions_mm?: [number, number, number];
+  pcb_thickness_mm?: number;
+  mass_g?: number;
+  mounting_holes_mm?: number[][];
+  svg_icon_kind?: string;
 }
 
 export interface MicrobitAccessorySpec {
@@ -52,6 +57,11 @@ export interface MicrobitAccessorySpec {
   how_it_works?: string;
   wires: MicrobitAccessoryWire[];
   summary: string;
+  dimensions_mm?: [number, number, number];
+  mass_g?: number;
+  mounting_holes_mm?: number[][];
+  cutout_profile?: { face: string; w_mm: number; h_mm: number } | null;
+  svg_icon_kind?: string;
 }
 
 export interface MicrobitAttachment {
@@ -60,6 +70,77 @@ export interface MicrobitAttachment {
   label: string;
   pin: string;
   secondary_pin?: string | null;
+  position_mm?: [number, number, number];
+  rotation_deg?: [number, number, number];
+}
+
+export type EnclosureStyle =
+  | "box_with_lid"
+  | "open_tray_cradle"
+  | "snap_fit_case"
+  | "desk_stand"
+  | "mounting_plate_bracket";
+
+export interface EnclosureConfig {
+  enabled: boolean;
+  style: EnclosureStyle;
+  width_mm: number;
+  length_mm: number;
+  height_mm: number;
+  wall_mm: number;
+  clearance_mm: number;
+  corner_radius_mm: number;
+  floor_mm: number;
+  standoff_height_mm: number;
+  include_lid: boolean;
+  lid_explode_mm: number;
+  include_standoffs: boolean;
+  include_vent_slots: boolean;
+  include_cutouts: boolean;
+  color_hex: string;
+  center_mm?: [number, number, number];
+  standoffs_mm?: Array<{ x_mm: number; y_mm: number; hole_d_mm?: number; source?: string }>;
+  cutouts?: Array<{ label: string; face: string; x_mm: number; y_mm: number; w_mm: number; h_mm: number }>;
+}
+
+export type CustomShapeKind =
+  | "box"
+  | "cylinder"
+  | "rounded_box"
+  | "bracket_l"
+  | "standoff_post"
+  | "cutout_hole"
+  | "photo_relief";
+
+export interface Custom3DShape {
+  id: string;
+  name: string;
+  kind: CustomShapeKind;
+  size_mm: [number, number, number];
+  position_mm: [number, number, number];
+  rotation_deg: [number, number, number];
+  color_hex: string;
+  heightmap_b64?: string | null;
+}
+
+export interface LayoutEnvelope {
+  min_mm: [number, number, number];
+  max_mm: [number, number, number];
+  center_mm: [number, number, number];
+  size_mm: [number, number, number];
+  standoffs_mm: Array<{ x_mm: number; y_mm: number; hole_d_mm?: number; source?: string }>;
+  cutouts: Array<{ label: string; face: string; x_mm: number; y_mm: number; w_mm: number; h_mm: number }>;
+}
+
+export interface StlExportStats {
+  triangle_count: number;
+  vertex_count: number;
+  volume_cm3: number;
+  estimated_filament_g: number;
+  estimated_print_min: number;
+  bounding_box_mm: [number, number, number];
+  is_watertight: boolean;
+  units: string;
 }
 
 export interface MicrobitWiringStep {
@@ -113,6 +194,9 @@ export interface MicrobitProject {
   description: string;
   attachments: MicrobitAttachment[];
   sim_rules?: MicrobitSimRule[];
+  enclosure_config?: EnclosureConfig;
+  custom_shapes?: Custom3DShape[];
+  envelope?: LayoutEnvelope;
   chat_history?: MicrobitChatMessage[];
   code: string;
   wiring: MicrobitWiringValidation;
@@ -194,11 +278,65 @@ export async function updateMicrobitProject(
     board_id: BoardId;
     description: string;
     attachments: MicrobitAttachment[];
+    enclosure_config: EnclosureConfig;
+    custom_shapes: Custom3DShape[];
     code: string;
   }>
 ): Promise<{ project: MicrobitProject }> {
   return mbReq(`/api/microbit/projects/${encodeURIComponent(projectId)}`, {
     method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function autoFitProjectEnclosure(
+  projectId: string
+): Promise<{ ok: boolean; enclosure_config: EnclosureConfig; project: MicrobitProject }> {
+  return mbReq(`/api/microbit/projects/${encodeURIComponent(projectId)}/enclosure/auto-fit`, {
+    method: "POST",
+  });
+}
+
+export async function exportProjectEnclosureStl(
+  projectId: string
+): Promise<{ blob: Blob; filename: string; stats: StlExportStats | null }> {
+  const res = await fetch(
+    `${API_URL}/api/microbit/projects/${encodeURIComponent(projectId)}/enclosure/export.stl`,
+    { method: "POST" }
+  );
+  if (!res.ok) {
+    throw new Error(`STL export failed (HTTP ${res.status})`);
+  }
+  const blob = await res.blob();
+  const disp = res.headers.get("Content-Disposition") || "";
+  const match = disp.match(/filename="([^"]+)"/);
+  const filename = match ? match[1] : `enclosure_${projectId}.stl`;
+  let stats: StlExportStats | null = null;
+  const rawStats = res.headers.get("X-STL-Stats");
+  if (rawStats) {
+    try {
+      stats = JSON.parse(rawStats) as StlExportStats;
+    } catch {
+      stats = null;
+    }
+  }
+  return { blob, filename, stats };
+}
+
+export async function createPhoto3DShape(
+  projectId: string,
+  payload: {
+    name: string;
+    image_b64: string;
+    width_mm: number;
+    length_mm: number;
+    height_mm: number;
+    invert?: boolean;
+  }
+): Promise<{ ok: boolean; shape: Custom3DShape; project: MicrobitProject }> {
+  return mbReq(`/api/microbit/projects/${encodeURIComponent(projectId)}/shapes/from-photo`, {
+    method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });

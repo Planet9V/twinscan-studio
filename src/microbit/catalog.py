@@ -625,3 +625,127 @@ def generate_prototype_code(
         loop.append("    print('TEMP_C:', temperature())")
 
     return "\n".join(imports) + "\n\n" + "\n".join(setup) + "\n\nwhile True:\n" + "\n".join(loop) + "\n    sleep(150)\n"
+
+
+# ---------------------------------------------------------------------------
+# 1:1 Millimeter Mechanical Specs (inspired by Baggage Claims Device Envelope)
+# ---------------------------------------------------------------------------
+_BOARD_MECHANICAL_SPECS: Dict[str, Dict[str, Any]] = {
+    "microbit_v2": {
+        "dimensions_mm": [51.6, 42.0, 11.7],
+        "pcb_thickness_mm": 1.6,
+        "mass_g": 8.0,
+        "mounting_holes_mm": [[-24.0, 16.5, 4.8], [-16.0, 16.5, 3.1], [16.0, 16.5, 3.1], [24.0, 16.5, 4.8]],
+        "svg_icon_kind": "microbit_v2",
+    },
+    "rpi5_16gb": {
+        "dimensions_mm": [85.0, 56.0, 16.0],
+        "pcb_thickness_mm": 1.6,
+        "mass_g": 46.0,
+        "mounting_holes_mm": [[-39.0, -24.5, 2.75], [19.0, -24.5, 2.75], [-39.0, 24.5, 2.75], [19.0, 24.5, 2.75]],
+        "svg_icon_kind": "rpi5_16gb",
+    },
+    "puppypi_pro": {
+        "dimensions_mm": [149.0, 226.0, 46.0],
+        "pcb_thickness_mm": 2.0,
+        "mass_g": 720.0,
+        "mounting_holes_mm": [[-45.0, -60.0, 3.2], [45.0, -60.0, 3.2], [-45.0, 60.0, 3.2], [45.0, 60.0, 3.2]],
+        "svg_icon_kind": "puppypi_pro",
+    },
+}
+
+_ACCESSORY_MECHANICAL_SPECS: Dict[str, Dict[str, Any]] = {
+    "hiwonder_temp_hum_v11": {
+        "dimensions_mm": [48.0, 24.0, 10.5],
+        "mass_g": 6.0,
+        "mounting_holes_mm": [[-16.0, 0.0, 4.8], [16.0, 0.0, 4.8]],
+        "cutout_profile": {"face": "top", "w_mm": 16.0, "h_mm": 12.0},
+        "svg_icon_kind": "temp_hum",
+    },
+    "hiwonder_touch_sensor": {
+        "dimensions_mm": [50.0, 20.0, 9.0],
+        "mass_g": 5.5,
+        "mounting_holes_mm": [[-16.0, 0.0, 4.8], [16.0, 0.0, 4.8]],
+        "cutout_profile": {"face": "top", "w_mm": 16.0, "h_mm": 16.0},
+        "svg_icon_kind": "touch_pad",
+    },
+    "hiwonder_ultrasonic_v56": {
+        "dimensions_mm": [45.0, 20.0, 15.0],
+        "mass_g": 11.0,
+        "mounting_holes_mm": [[-16.0, 0.0, 4.8], [0.0, 0.0, 4.8], [16.0, 0.0, 4.8]],
+        "cutout_profile": {"face": "front", "w_mm": 42.0, "h_mm": 16.5},
+        "svg_icon_kind": "ultrasonic",
+    },
+    "hiwonder_led_matrix_8x16": {
+        "dimensions_mm": [64.0, 32.0, 11.0],
+        "mass_g": 18.0,
+        "mounting_holes_mm": [[-28.0, -12.0, 3.0], [28.0, -12.0, 3.0], [-28.0, 12.0, 3.0], [28.0, 12.0, 3.0]],
+        "cutout_profile": {"face": "top", "w_mm": 54.0, "h_mm": 24.0},
+        "svg_icon_kind": "led_matrix",
+    },
+    "ld19_lidar": {
+        "dimensions_mm": [38.6, 38.6, 33.5],
+        "mass_g": 47.0,
+        "mounting_holes_mm": [[-15.0, -15.0, 2.6], [15.0, -15.0, 2.6], [-15.0, 15.0, 2.6], [15.0, 15.0, 2.6]],
+        "cutout_profile": {"face": "top", "w_mm": 40.0, "h_mm": 40.0},
+        "svg_icon_kind": "lidar",
+    },
+    "wonderecho_ai_box": {
+        "dimensions_mm": [45.0, 30.0, 18.0],
+        "mass_g": 28.0,
+        "mounting_holes_mm": [[-18.0, 0.0, 3.0], [18.0, 0.0, 3.0]],
+        "cutout_profile": {"face": "top", "w_mm": 24.0, "h_mm": 24.0},
+        "svg_icon_kind": "ai_box",
+    },
+    "sg90_servo": {
+        "dimensions_mm": [22.5, 11.8, 31.0],
+        "mass_g": 9.0,
+        "mounting_holes_mm": [[-13.75, 0.0, 2.2], [13.75, 0.0, 2.2]],
+        "cutout_profile": {"face": "top", "w_mm": 23.0, "h_mm": 12.2},
+        "svg_icon_kind": "servo",
+    },
+    "neopixel_8": {
+        "dimensions_mm": [52.0, 10.0, 3.5],
+        "mass_g": 4.0,
+        "mounting_holes_mm": [[-22.0, 0.0, 2.5], [22.0, 0.0, 2.5]],
+        "cutout_profile": {"face": "top", "w_mm": 50.0, "h_mm": 8.0},
+        "svg_icon_kind": "neopixel",
+    },
+    "external_speaker": {
+        "dimensions_mm": [40.0, 40.0, 14.0],
+        "mass_g": 24.0,
+        "mounting_holes_mm": [[-16.0, -16.0, 3.0], [16.0, -16.0, 3.0], [-16.0, 16.0, 3.0], [16.0, 16.0, 3.0]],
+        "cutout_profile": {"face": "top", "w_mm": 36.0, "h_mm": 36.0},
+        "svg_icon_kind": "speaker",
+    },
+    "oled_ssd1306": {
+        "dimensions_mm": [27.0, 27.8, 4.2],
+        "mass_g": 5.0,
+        "mounting_holes_mm": [[-11.5, -11.5, 2.2], [11.5, -11.5, 2.2], [-11.5, 11.5, 2.2], [11.5, 11.5, 2.2]],
+        "cutout_profile": {"face": "top", "w_mm": 24.0, "h_mm": 14.0},
+        "svg_icon_kind": "oled",
+    },
+    "i2c_level_shifter": {
+        "dimensions_mm": [15.2, 12.7, 4.5],
+        "mass_g": 1.8,
+        "mounting_holes_mm": [],
+        "cutout_profile": None,
+        "svg_icon_kind": "level_shifter",
+    },
+}
+
+for _bid, _mspec in _BOARD_MECHANICAL_SPECS.items():
+    if _bid in BOARD_PROFILES:
+        BOARD_PROFILES[_bid].update(_mspec)
+
+for _acc in MICROBIT_ACCESSORIES:
+    _aspec = _ACCESSORY_MECHANICAL_SPECS.get(_acc["id"])
+    if _aspec:
+        _acc.update(_aspec)
+    else:
+        _acc.setdefault("dimensions_mm", [28.0, 20.0, 10.0])
+        _acc.setdefault("mass_g", 6.0)
+        _acc.setdefault("mounting_holes_mm", [])
+        _acc.setdefault("cutout_profile", None)
+        _acc.setdefault("svg_icon_kind", "generic")
+

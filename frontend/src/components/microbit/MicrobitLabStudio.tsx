@@ -31,11 +31,18 @@ import { Input } from "@/components/ui/input";
 import {
   Microbit3DCanvas,
   type Microbit3DHandle,
+  type RenderMaterialMode,
 } from "@/components/microbit/Microbit3DCanvas";
+import { ComponentToolbar } from "@/components/microbit/ComponentToolbar";
+import { ElectronicSchematicView } from "@/components/microbit/ElectronicSchematicView";
+import { EnclosureModelingPanel } from "@/components/microbit/EnclosureModelingPanel";
 import {
+  autoFitProjectEnclosure,
   chatWithMicrobitCopilot,
   createMicrobitProject,
+  createPhoto3DShape,
   deployMicrobitCode,
+  exportProjectEnclosureStl,
   generateMicrobitCode,
   getMicrobitCatalog,
   getMicrobitHardwareStatus,
@@ -44,6 +51,9 @@ import {
   runMicrobitSelfTest,
   updateMicrobitProject,
   type BoardId,
+  type Custom3DShape,
+  type CustomShapeKind,
+  type EnclosureConfig,
   type MicrobitAccessorySpec,
   type MicrobitAttachment,
   type MicrobitCatalog,
@@ -51,6 +61,7 @@ import {
   type MicrobitLiveSensors,
   type MicrobitProject,
   type MicrobitTrigger,
+  type StlExportStats,
 } from "@/lib/microbitApi";
 import { cn } from "@/lib/utils";
 
@@ -126,8 +137,8 @@ function speakBrowserText(text: string): void {
 const QUICK_PROMPTS = [
   "On lift say 'Weeee!' with a surprised face and slide sound",
   "On left button play a chime and sweep the servo to 180 degrees",
-  "Attach NeoPixels on P1 and glow purple on right button",
-  "Add an external speaker on P0 and on touch logo say 'That tickles!'",
+  "Build a 2.4mm snap-fit 3D-printable enclosure around my parts with vents",
+  "Add Hiwonder ultrasonic and a 40x20x12mm L-bracket mount",
 ];
 
 export function MicrobitLabStudio(): React.JSX.Element {
@@ -168,6 +179,14 @@ export function MicrobitLabStudio(): React.JSX.Element {
   const [newProjName, setNewProjName] = useState("Smart Desk Prototype");
   const [dragOverCanvas, setDragOverCanvas] = useState(false);
   const [infoAccId, setInfoAccId] = useState<string | null>(null);
+
+  // 3-View CAD & Enclosure Studio State
+  const [viewMode, setViewMode] = useState<"physical" | "schematic" | "structure">("physical");
+  const [renderMode, setRenderMode] = useState<RenderMaterialMode>("solid");
+  const [transformMode, setTransformMode] = useState<"translate" | "rotate">("translate");
+  const [selectedAttachmentId, setSelectedAttachmentId] = useState<string | null>(null);
+  const [showWires, setShowWires] = useState<boolean>(true);
+  const [stlStats, setStlStats] = useState<StlExportStats | null>(null);
 
   const hydrate = useCallback(async (selectId?: string) => {
     try {
@@ -248,6 +267,143 @@ export function MicrobitLabStudio(): React.JSX.Element {
       setSimLastEvent(parts.join(" · "));
     },
     [project?.sim_rules, simAudioOn]
+  );
+
+  const handleMoveAttachment = useCallback(
+    async (attId: string, positionMm: [number, number, number], rotationDeg: [number, number, number]) => {
+      if (!project) return;
+      const nextAtts = project.attachments.map((a) =>
+        a.id === attId ? { ...a, position_mm: positionMm, rotation_deg: rotationDeg } : a
+      );
+      setProject({ ...project, attachments: nextAtts });
+      try {
+        const res = await updateMicrobitProject(project.id, { attachments: nextAtts });
+        setProject(res.project);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to save part placement.");
+      }
+    },
+    [project]
+  );
+
+  const handleUpdateEnclosure = useCallback(
+    async (next: EnclosureConfig) => {
+      if (!project) return;
+      setProject({ ...project, enclosure_config: next });
+      try {
+        const res = await updateMicrobitProject(project.id, { enclosure_config: next });
+        setProject(res.project);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to update enclosure.");
+      }
+    },
+    [project]
+  );
+
+  const handleAutoFitEnclosure = useCallback(async () => {
+    if (!project) return;
+    setBusy("autofit");
+    setError(null);
+    try {
+      const res = await autoFitProjectEnclosure(project.id);
+      setProject(res.project);
+      setViewMode("structure");
+      setRenderMode("translucent");
+      setNotice(
+        `Auto-fitted enclosure (${res.enclosure_config.width_mm}×${res.enclosure_config.length_mm}×${res.enclosure_config.height_mm} mm) around your physical layout.`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Auto-fit failed.");
+    } finally {
+      setBusy(null);
+    }
+  }, [project]);
+
+  const handleExportStl = useCallback(async () => {
+    if (!project) return;
+    setBusy("stl");
+    setError(null);
+    try {
+      const { blob, filename, stats } = await exportProjectEnclosureStl(project.id);
+      if (stats) setStlStats(stats);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      setNotice(`Exported 3D-printer STL: ${filename}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "STL export failed.");
+    } finally {
+      setBusy(null);
+    }
+  }, [project]);
+
+  const handleAddCustomShape = useCallback(
+    async (kind: CustomShapeKind, sizeMm: [number, number, number], label: string) => {
+      if (!project) return;
+      const nextShape: Custom3DShape = {
+        id: `shp_${Math.random().toString(36).slice(2, 8)}`,
+        name: label,
+        kind,
+        size_mm: sizeMm,
+        position_mm: [0, 36, 0],
+        rotation_deg: [0, 0, 0],
+        color_hex: "#f97316",
+      };
+      const nextShapes = [...(project.custom_shapes || []), nextShape];
+      setProject({ ...project, custom_shapes: nextShapes });
+      try {
+        const res = await updateMicrobitProject(project.id, { custom_shapes: nextShapes });
+        setProject(res.project);
+        setNotice(`Added 3D shape: ${label} (${sizeMm.join("×")} mm)`);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to add 3D shape.");
+      }
+    },
+    [project]
+  );
+
+  const handleRemoveCustomShape = useCallback(
+    async (shapeId: string) => {
+      if (!project) return;
+      const nextShapes = (project.custom_shapes || []).filter((s) => s.id !== shapeId);
+      setProject({ ...project, custom_shapes: nextShapes });
+      try {
+        const res = await updateMicrobitProject(project.id, { custom_shapes: nextShapes });
+        setProject(res.project);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to remove 3D shape.");
+      }
+    },
+    [project]
+  );
+
+  const handleCreatePhotoShape = useCallback(
+    async (payload: {
+      name: string;
+      image_b64: string;
+      width_mm: number;
+      length_mm: number;
+      height_mm: number;
+      invert: boolean;
+    }) => {
+      if (!project) return;
+      setBusy("photo");
+      setError(null);
+      try {
+        const res = await createPhoto3DShape(project.id, payload);
+        setProject(res.project);
+        setViewMode("structure");
+        setNotice(`Generated 3D-printable photo shape: ${res.shape.name}`);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Photo-to-3D shape failed.");
+      } finally {
+        setBusy(null);
+      }
+    },
+    [project]
   );
 
   const handleSendChat = async (textOverride?: string) => {
@@ -520,15 +676,18 @@ export function MicrobitLabStudio(): React.JSX.Element {
 
       {/* 3-Column Workbench */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-        {/* LEFT: Parts Library & Wiring Checklist */}
-        <div className="space-y-4 xl:col-span-3">
+        {/* LEFT: Visual Component Toolbar (SVG icons, mm dimensions, drag onto 3D canvas) */}
+        <div className="space-y-3 xl:col-span-3">
           <Card className="border-white/10 bg-slate-950/90">
             <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-1.5 text-xs font-semibold text-amber-300">
-                <Cable className="h-3.5 w-3.5" /> Attached Parts &amp; Wiring ({project.attachments.length})
+              <CardTitle className="flex items-center justify-between text-xs font-semibold text-cyan-300">
+                <span className="flex items-center gap-1.5">
+                  <Cable className="h-3.5 w-3.5 text-eigenia-orange" /> Visual Hardware Toolbar
+                </span>
+                <Badge variant="neutral">1:1 mm</Badge>
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2">
+            <CardContent className="space-y-2.5">
               {project.wiring.conflicts.map((c, idx) => (
                 <div key={`conf_${idx}`} className="flex items-start gap-1.5 rounded-md border border-red-500/40 bg-red-950/50 p-2 text-[11px] text-red-200">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
@@ -541,204 +700,202 @@ export function MicrobitLabStudio(): React.JSX.Element {
                   <span>{w}</span>
                 </div>
               ))}
-              {project.attachments.map((att) => {
-                const spec = catalog.accessories.find((a) => a.id === att.accessory_id);
-                return (
-                  <div key={att.id} className="flex items-center justify-between gap-1.5 rounded-lg border border-white/10 bg-slate-900/70 px-2.5 py-1.5 text-xs">
-                    <span className="truncate font-medium text-slate-100">{att.label}</span>
-                    <div className="flex items-center gap-1">
-                      <select
-                        value={att.pin}
-                        onChange={(e) => void handleChangePin(att.id, e.target.value)}
-                        className="h-6 rounded border border-white/15 bg-slate-950 px-1 font-mono text-[10px] text-cyan-300"
-                      >
-                        {(spec?.allowed_signal_pins || ["P0", "P1", "P2"]).map((p) => (
-                          <option key={p} value={p}>
-                            {p}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        onClick={() => void handleRemoveAttachment(att.id)}
-                        className="text-slate-500 hover:text-red-400 cursor-pointer"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
 
-              {project.wiring.wiring_steps.length > 0 && (
-                <div className="max-h-36 space-y-1 overflow-y-auto border-t border-white/10 pt-2">
-                  {project.wiring.wiring_steps.map((s) => (
-                    <div key={`ws_${s.step}`} className="flex items-center gap-2 text-[10px] text-slate-300">
-                      <span
-                        style={{ backgroundColor: s.color }}
-                        className="h-2 w-2 shrink-0 rounded-full border border-white/30"
-                      />
-                      <span>{s.instruction}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="border-white/10 bg-slate-950/90">
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center justify-between text-xs font-semibold text-cyan-300">
-                <span className="flex items-center gap-1.5">
-                  <Plus className="h-3.5 w-3.5" /> Hiwonder &amp; Parts Library
-                </span>
-                <span className="text-[10px] font-normal text-slate-400">Drag onto 3D</span>
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="max-h-[420px] space-y-1.5 overflow-y-auto">
-              {catalog.accessories.map((acc) => {
-                const expanded = infoAccId === acc.id;
-                return (
-                  <div
-                    key={acc.id}
-                    draggable
-                    onDragStart={(e) => {
-                      e.dataTransfer.setData("text/plain", acc.id);
-                      e.dataTransfer.effectAllowed = "copy";
-                    }}
-                    className="rounded-lg border border-white/10 bg-slate-900/60 px-2.5 py-1.5 transition-colors hover:border-cyan-500/40 cursor-grab active:cursor-grabbing"
-                  >
-                    <div className="flex items-center justify-between gap-1.5">
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        <GripVertical className="h-3.5 w-3.5 shrink-0 text-slate-500" />
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="truncate text-[11px] font-medium text-slate-100">{acc.name}</span>
-                            {acc.requires_5v && (
-                              <span className="rounded bg-amber-500/20 px-1 font-mono text-[9px] text-amber-300">
-                                5V
-                              </span>
-                            )}
-                          </div>
-                          <div className="truncate text-[10px] text-slate-400">{acc.summary}</div>
-                        </div>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-1">
-                        <button
-                          type="button"
-                          onClick={() => setInfoAccId(expanded ? null : acc.id)}
-                          title="Specs & How It Works"
-                          className="rounded p-1 text-slate-400 hover:bg-white/10 hover:text-cyan-300 cursor-pointer"
-                        >
-                          <HelpCircle className="h-3.5 w-3.5" />
-                        </button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => void handleAttachAccessory(acc)}
-                          className="h-6 px-2 text-[10px] cursor-pointer"
-                        >
-                          + Add
-                        </Button>
-                      </div>
-                    </div>
-                    {expanded && (
-                      <div className="mt-2 space-y-1 border-t border-white/10 pt-2 text-[10px] text-slate-300">
-                        {acc.ic && (
-                          <div>
-                            <strong className="text-cyan-300">IC / Bus:</strong> {acc.ic} ({acc.protocol})
-                          </div>
-                        )}
-                        {acc.how_it_works && <div>{acc.how_it_works}</div>}
-                        <div className="text-amber-200/90">
-                          <strong>Wiring Note:</strong> {acc.power_note}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+              <ComponentToolbar
+                boardId={activeBoardId}
+                accessories={catalog.accessories}
+                attachments={project.attachments}
+                pins={activePins}
+                selectedAttachmentId={selectedAttachmentId}
+                onAddAccessory={(acc) => void handleAttachAccessory(acc)}
+                onSelectAttachment={(id) => setSelectedAttachmentId(id)}
+                onRemoveAttachment={(id) => void handleRemoveAttachment(id)}
+                onChangePin={(id, pin) => void handleChangePin(id, pin)}
+                onShowInfo={(id) => setInfoAccId(id)}
+                infoAccId={infoAccId}
+              />
             </CardContent>
           </Card>
         </div>
 
-        {/* CENTER: Interactive 3D Virtual Twin Simulator + Trigger Test Bar + Pinout */}
+        {/* CENTER: 3-Mode Interactive Workbench (Physical 3D Twin | Schematic | 3D Print Structure) */}
         <div className="space-y-4 xl:col-span-5">
           <Card className="overflow-hidden border-white/10 bg-slate-950/90">
-            <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3.5 py-2">
-              <div className="flex items-center gap-2">
-                <CardTitle className="text-xs font-semibold text-white">
-                  Live Interactive 3D Twin Simulator
-                </CardTitle>
-                <Badge variant="sky" className="text-[9px]">
-                  Click 3D Buttons / Logo / Pins
-                </Badge>
-              </div>
-              <div className="flex items-center gap-1">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setSimAudioOn((v) => !v)}
-                  title={simAudioOn ? "Mute virtual speaker" : "Unmute virtual speaker"}
-                  className="h-6 px-2 text-cyan-300 cursor-pointer"
-                >
-                  {simAudioOn ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5 text-slate-500" />}
-                </Button>
-                {(["front", "back", "iso", "top"] as const).map((v) => (
+            <CardHeader className="space-y-2 border-b border-white/10 px-3.5 py-2.5">
+              {/* Row 1: 3 Synchronized View Mode Tabs */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1 rounded-md border border-white/10 bg-eigenia-obsidian p-0.5 font-mono text-[10px]">
+                  {(
+                    [
+                      { id: "physical", label: "1. Physical 3D Twin" },
+                      { id: "schematic", label: "2. Electronic Schematic" },
+                      { id: "structure", label: "3. 3D-Print Structure" },
+                    ] as const
+                  ).map((tab) => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setViewMode(tab.id)}
+                      className={cn(
+                        "rounded px-2.5 py-1 font-semibold transition",
+                        viewMode === tab.id
+                          ? "bg-eigenia-orange text-black"
+                          : "text-eigenia-muted hover:text-white"
+                      )}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-1">
                   <Button
-                    key={v}
                     size="sm"
                     variant="ghost"
-                    onClick={() => canvasRef.current?.setView(v)}
-                    className="h-6 px-1.5 text-[10px] uppercase text-slate-300 hover:text-white cursor-pointer"
+                    onClick={() => setSimAudioOn((v) => !v)}
+                    title={simAudioOn ? "Mute virtual speaker" : "Unmute virtual speaker"}
+                    className="h-6 px-2 text-cyan-300 cursor-pointer"
                   >
-                    {v}
+                    {simAudioOn ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5 text-slate-500" />}
                   </Button>
-                ))}
+                  {viewMode !== "schematic" &&
+                    (["front", "back", "iso", "top"] as const).map((v) => (
+                      <Button
+                        key={v}
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => canvasRef.current?.setView(v)}
+                        className="h-6 px-1.5 text-[10px] uppercase text-slate-300 hover:text-white cursor-pointer"
+                      >
+                        {v}
+                      </Button>
+                    ))}
+                </div>
               </div>
+
+              {/* Row 2: Material Render Mode (Solid / Translucent / Wireframe) & 3D Move/Rotate Gizmo */}
+              {viewMode !== "schematic" && (
+                <div className="flex flex-wrap items-center justify-between gap-2 font-mono text-[10px]">
+                  <div className="flex items-center gap-1">
+                    {(["solid", "translucent", "wireframe"] as const).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => setRenderMode(m)}
+                        className={cn(
+                          "rounded border px-2 py-0.5 uppercase transition",
+                          renderMode === m
+                            ? "border-eigenia-sky bg-eigenia-sky/20 text-eigenia-sky"
+                            : "border-white/10 text-eigenia-muted hover:text-white"
+                        )}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setShowWires((w) => !w)}
+                      className={cn(
+                        "rounded border px-2 py-0.5 uppercase transition",
+                        showWires
+                          ? "border-emerald-500/50 bg-emerald-500/15 text-emerald-300"
+                          : "border-white/10 text-eigenia-muted"
+                      )}
+                    >
+                      Wires: {showWires ? "ON" : "OFF"}
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <span className="text-eigenia-muted">3D Gizmo:</span>
+                    {(["translate", "rotate"] as const).map((tm) => (
+                      <button
+                        key={tm}
+                        type="button"
+                        onClick={() => setTransformMode(tm)}
+                        className={cn(
+                          "rounded border px-2 py-0.5 uppercase transition",
+                          transformMode === tm
+                            ? "border-eigenia-orange bg-eigenia-orange/20 text-eigenia-orange"
+                            : "border-white/10 text-eigenia-muted hover:text-white"
+                        )}
+                      >
+                        {tm === "translate" ? "Move" : "Rotate"}
+                      </button>
+                    ))}
+                    {selectedAttachmentId && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedAttachmentId(null)}
+                        className="rounded border border-white/15 px-1.5 py-0.5 text-white hover:bg-white/10"
+                      >
+                        Deselect
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
             </CardHeader>
             <CardContent className="p-0">
-              <div
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setDragOverCanvas(true);
-                }}
-                onDragLeave={() => setDragOverCanvas(false)}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setDragOverCanvas(false);
-                  const accId = e.dataTransfer.getData("text/plain");
-                  const found = catalog.accessories.find((a) => a.id === accId);
-                  if (found) void handleAttachAccessory(found);
-                }}
-                className={cn(
-                  "relative h-[390px] w-full bg-[#050914] transition-all",
-                  dragOverCanvas && "ring-2 ring-inset ring-cyan-400"
-                )}
-              >
-                <Microbit3DCanvas
-                  ref={canvasRef}
-                  boardId={activeBoardId}
-                  pins={activePins}
+              {viewMode === "schematic" ? (
+                <ElectronicSchematicView
+                  board={catalog.boards?.[activeBoardId] || catalog.board}
                   accessories={catalog.accessories}
                   attachments={project.attachments}
-                  selectedPinId={selectedPinId}
-                  liveSensors={liveSensors}
-                  liveTiltEnabled={liveTilt}
-                  ledIcon={simLedIcon}
-                  simServoAngle={simServoAngle}
-                  simNeopixelHex={simNeopixelHex}
-                  onSelectPin={(pid) => setSelectedPinId(pid)}
-                  onVirtualTrigger={handleVirtualTrigger}
+                  wiring={project.wiring}
                 />
-                {dragOverCanvas && (
-                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-cyan-950/40 backdrop-blur-[1px]">
-                    <span className="rounded-full border border-cyan-400 bg-slate-950/90 px-4 py-1.5 text-xs font-semibold text-cyan-200 shadow-lg">
-                      Drop to Attach Component &amp; Auto-Wire 3D Jumpers
-                    </span>
-                  </div>
-                )}
-              </div>
+              ) : (
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragOverCanvas(true);
+                  }}
+                  onDragLeave={() => setDragOverCanvas(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOverCanvas(false);
+                    const accId = e.dataTransfer.getData("text/plain");
+                    const found = catalog.accessories.find((a) => a.id === accId);
+                    if (found) void handleAttachAccessory(found);
+                  }}
+                  className={cn(
+                    "relative h-[420px] w-full bg-[#050914] transition-all",
+                    dragOverCanvas && "ring-2 ring-inset ring-cyan-400"
+                  )}
+                >
+                  <Microbit3DCanvas
+                    ref={canvasRef}
+                    boardId={activeBoardId}
+                    pins={activePins}
+                    accessories={catalog.accessories}
+                    attachments={project.attachments}
+                    selectedPinId={selectedPinId}
+                    selectedAttachmentId={selectedAttachmentId}
+                    transformMode={transformMode}
+                    renderMode={renderMode}
+                    showWires={showWires}
+                    showEnclosure={viewMode === "structure" || Boolean(project.enclosure_config?.enabled)}
+                    enclosureConfig={project.enclosure_config || null}
+                    customShapes={project.custom_shapes || []}
+                    liveSensors={liveSensors}
+                    liveTiltEnabled={liveTilt}
+                    ledIcon={simLedIcon}
+                    simServoAngle={simServoAngle}
+                    simNeopixelHex={simNeopixelHex}
+                    onSelectPin={(pid) => setSelectedPinId(pid)}
+                    onSelectAttachment={(id) => setSelectedAttachmentId(id)}
+                    onMoveAttachment={(id, pos, rot) => void handleMoveAttachment(id, pos, rot)}
+                    onVirtualTrigger={handleVirtualTrigger}
+                  />
+                  {dragOverCanvas && (
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-cyan-950/40 backdrop-blur-[1px]">
+                      <span className="rounded-full border border-cyan-400 bg-slate-950/90 px-4 py-1.5 text-xs font-semibold text-cyan-200 shadow-lg">
+                        Drop to Place 1:1 mm 3D Part &amp; Auto-Wire Jumpers
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Virtual Event Simulator Test Bar */}
               <div className="space-y-2 border-t border-white/10 bg-slate-900/70 p-3">
@@ -781,6 +938,22 @@ export function MicrobitLabStudio(): React.JSX.Element {
               </div>
             </CardContent>
           </Card>
+
+          {/* 3D Printer Enclosure & Custom Shape Modeling Studio */}
+          {project.enclosure_config && (
+            <EnclosureModelingPanel
+              enclosure={project.enclosure_config}
+              customShapes={project.custom_shapes || []}
+              stlStats={stlStats}
+              busy={busy}
+              onUpdateEnclosure={(next) => void handleUpdateEnclosure(next)}
+              onAutoFit={() => void handleAutoFitEnclosure()}
+              onExportStl={() => void handleExportStl()}
+              onAddShape={(kind, sz, name) => void handleAddCustomShape(kind, sz, name)}
+              onRemoveShape={(id) => void handleRemoveCustomShape(id)}
+              onCreatePhotoShape={(p) => void handleCreatePhotoShape(p)}
+            />
+          )}
 
           {/* Pinout Schematic Inspector */}
           <Card className="border-white/10 bg-slate-950/90">

@@ -10,6 +10,13 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from src.microbit.catalog import STARTER_TEMPLATES, validate_project_wiring
+from src.microbit.enclosure_cad import (
+    compute_layout_envelope,
+    default_attachment_position_mm,
+    default_enclosure_config,
+    sanitize_custom_shapes,
+    sanitize_enclosure_config,
+)
 
 MICROBIT_PROJECTS_SETTING_KEY = "microbit_projects_json"
 
@@ -62,9 +69,11 @@ def _default_project(name: str = "micro:bit v2.2 Interactive Prototype") -> Dict
         "id": f"mb_{uuid.uuid4().hex[:8]}",
         "name": name,
         "board_id": "microbit_v2",
-        "description": "Interactive 3D pinout prototype with AI Co-Pilot simulator and live deployment.",
+        "description": "Interactive 3D pinout prototype with AI Co-Pilot simulator, schematic view & 3D-printable enclosure CAD.",
         "attachments": attachments,
         "sim_rules": sim_rules,
+        "enclosure_config": default_enclosure_config(),
+        "custom_shapes": [],
         "chat_history": [],
         "code": STARTER_TEMPLATES[0]["code"],
         "created_at": now,
@@ -117,7 +126,20 @@ class MicrobitProjectStore:
         out = dict(proj)
         board_id = str(out.get("board_id") or "microbit_v2")
         out["board_id"] = board_id
-        out["wiring"] = validate_project_wiring(out.get("attachments") or [], board_id=board_id)
+        raw_atts = list(out.get("attachments") or [])
+        norm_atts: List[Dict[str, Any]] = []
+        for idx, att in enumerate(raw_atts):
+            item = dict(att)
+            if not isinstance(item.get("position_mm"), list) or len(item["position_mm"]) < 3:
+                item["position_mm"] = default_attachment_position_mm(idx, len(raw_atts), board_id)
+            if not isinstance(item.get("rotation_deg"), list) or len(item["rotation_deg"]) < 3:
+                item["rotation_deg"] = [0.0, 0.0, 0.0]
+            norm_atts.append(item)
+        out["attachments"] = norm_atts
+        out["enclosure_config"] = sanitize_enclosure_config(out.get("enclosure_config"))
+        out["custom_shapes"] = sanitize_custom_shapes(out.get("custom_shapes"))
+        out["envelope"] = compute_layout_envelope(board_id, norm_atts, out["custom_shapes"])
+        out["wiring"] = validate_project_wiring(norm_atts, board_id=board_id)
         return out
 
     def list_projects(self) -> List[Dict[str, Any]]:
@@ -151,6 +173,8 @@ class MicrobitProjectStore:
             "description": description.strip(),
             "attachments": [],
             "sim_rules": [],
+            "enclosure_config": default_enclosure_config(),
+            "custom_shapes": [],
             "chat_history": [],
             "code": STARTER_TEMPLATES[0]["code"],
             "created_at": now,
@@ -163,7 +187,7 @@ class MicrobitProjectStore:
 
     def save_project(self, project: Dict[str, Any]) -> Dict[str, Any]:
         """Persist updates to an existing micro:bit project."""
-        clean = {k: v for k, v in project.items() if k != "wiring"}
+        clean = {k: v for k, v in project.items() if k not in {"wiring", "envelope"}}
         clean["updated_at"] = time.time()
         with self._lock:
             self._projects[str(clean["id"])] = clean

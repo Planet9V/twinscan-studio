@@ -3,14 +3,19 @@
 import React, { useEffect, useImperativeHandle, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import type {
   BoardId,
+  Custom3DShape,
+  EnclosureConfig,
   MicrobitAccessorySpec,
   MicrobitAttachment,
   MicrobitLiveSensors,
   MicrobitPinSpec,
   MicrobitTrigger,
 } from "@/lib/microbitApi";
+
+export type RenderMaterialMode = "solid" | "translucent" | "wireframe";
 
 export interface Microbit3DHandle {
   setView: (view: "front" | "back" | "iso" | "top") => void;
@@ -23,12 +28,21 @@ interface Microbit3DCanvasProps {
   accessories: MicrobitAccessorySpec[];
   attachments: MicrobitAttachment[];
   selectedPinId: string | null;
+  selectedAttachmentId?: string | null;
+  transformMode?: "translate" | "rotate";
+  renderMode?: RenderMaterialMode;
+  showWires?: boolean;
+  showEnclosure?: boolean;
+  enclosureConfig?: EnclosureConfig | null;
+  customShapes?: Custom3DShape[];
   liveSensors: MicrobitLiveSensors | null;
   liveTiltEnabled: boolean;
   ledIcon: string;
   simServoAngle: number;
   simNeopixelHex: string;
   onSelectPin: (pinId: string) => void;
+  onSelectAttachment?: (attId: string | null) => void;
+  onMoveAttachment?: (attId: string, positionMm: [number, number, number], rotationDeg: [number, number, number]) => void;
   onVirtualTrigger: (trigger: MicrobitTrigger) => void;
 }
 
@@ -328,12 +342,21 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
       accessories,
       attachments,
       selectedPinId,
+      selectedAttachmentId = null,
+      transformMode = "translate",
+      renderMode = "solid",
+      showWires = true,
+      showEnclosure = true,
+      enclosureConfig = null,
+      customShapes = [],
       liveSensors,
       liveTiltEnabled,
       ledIcon,
       simServoAngle,
       simNeopixelHex,
       onSelectPin,
+      onSelectAttachment,
+      onMoveAttachment,
       onVirtualTrigger,
     },
     ref
@@ -341,16 +364,23 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
     const mountRef = useRef<HTMLDivElement | null>(null);
     const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
     const controlsRef = useRef<OrbitControls | null>(null);
+    const transformRef = useRef<TransformControls | null>(null);
     const boardGroupRef = useRef<THREE.Group | null>(null);
     const ledMeshesRef = useRef<THREE.Mesh[][]>([]);
     const pinMeshesRef = useRef<Map<string, THREE.Mesh>>(new Map());
     const interactiveMeshesRef = useRef<THREE.Object3D[]>([]);
     const attachmentsGroupRef = useRef<THREE.Group | null>(null);
+    const attachmentObjByIdRef = useRef<Map<string, THREE.Group>>(new Map());
+    const enclosureGroupRef = useRef<THREE.Group | null>(null);
     const servoHornsRef = useRef<THREE.Group[]>([]);
     const neopixelMatsRef = useRef<THREE.MeshStandardMaterial[]>([]);
 
     const onSelectPinRef = useRef(onSelectPin);
     onSelectPinRef.current = onSelectPin;
+    const onSelectAttachmentRef = useRef(onSelectAttachment);
+    onSelectAttachmentRef.current = onSelectAttachment;
+    const onMoveAttachmentRef = useRef(onMoveAttachment);
+    onMoveAttachmentRef.current = onMoveAttachment;
     const onVirtualTriggerRef = useRef(onVirtualTrigger);
     onVirtualTriggerRef.current = onVirtualTrigger;
 
@@ -650,6 +680,35 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
       attachmentsGroupRef.current = attGroup;
       scene.add(attGroup);
 
+      const encGroup = new THREE.Group();
+      enclosureGroupRef.current = encGroup;
+      scene.add(encGroup);
+
+      // TransformControls for interactive 3D drag/rotate of placed hardware parts
+      const tControls = new TransformControls(camera, renderer.domElement);
+      tControls.setSize(0.75);
+      tControls.addEventListener("dragging-changed", (ev) => {
+        controls.enabled = !ev.value;
+        if (!ev.value && tControls.object && tControls.object.userData?.attachmentId) {
+          const obj = tControls.object;
+          const attId = String(obj.userData.attachmentId);
+          const posMm: [number, number, number] = [
+            Math.round(obj.position.x * 100) / 10,
+            Math.round(obj.position.y * 100) / 10,
+            Math.round(obj.position.z * 100) / 10,
+          ];
+          const rotDeg: [number, number, number] = [
+            Math.round(THREE.MathUtils.radToDeg(obj.rotation.x)),
+            Math.round(THREE.MathUtils.radToDeg(obj.rotation.y)),
+            Math.round(THREE.MathUtils.radToDeg(obj.rotation.z)),
+          ];
+          onMoveAttachmentRef.current?.(attId, posMm, rotDeg);
+        }
+      });
+      const tHelper = tControls.getHelper();
+      scene.add(tHelper);
+      transformRef.current = tControls;
+
       const raycaster = new THREE.Raycaster();
       const pointer = new THREE.Vector2();
       const onClick = (e: MouseEvent) => {
@@ -657,6 +716,24 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
         pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
         pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
         raycaster.setFromCamera(pointer, camera);
+
+        // First check placed attachments so user can click to grab & move them
+        const attObjs = Array.from(attachmentObjByIdRef.current.values());
+        const attHits = raycaster.intersectObjects(attObjs, true);
+        if (attHits.length > 0) {
+          let cur: THREE.Object3D | null = attHits[0].object;
+          if (cur.userData?.virtualTrigger) {
+            onVirtualTriggerRef.current(cur.userData.virtualTrigger as MicrobitTrigger);
+          }
+          while (cur) {
+            if (cur.userData?.attachmentId) {
+              onSelectAttachmentRef.current?.(String(cur.userData.attachmentId));
+              return;
+            }
+            cur = cur.parent;
+          }
+        }
+
         const hits = raycaster.intersectObjects(interactiveMeshesRef.current, false);
         if (hits.length > 0) {
           const ud = hits[0].object.userData;
@@ -720,10 +797,171 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
         cancelAnimationFrame(rafId);
         resizeObs.disconnect();
         renderer.domElement.removeEventListener("click", onClick);
+        tControls.detach();
+        tControls.dispose();
         controls.dispose();
         renderer.dispose();
       };
     }, [boardId, pins]);
+
+    // Sync TransformControls gizmo to selected attachment
+    useEffect(() => {
+      const tc = transformRef.current;
+      if (!tc) return;
+      tc.setMode(transformMode);
+      if (selectedAttachmentId) {
+        const target = attachmentObjByIdRef.current.get(selectedAttachmentId);
+        if (target) {
+          tc.attach(target);
+          return;
+        }
+      }
+      tc.detach();
+    }, [selectedAttachmentId, transformMode, attachments]);
+
+    // Render parametric 3D-printable enclosure & custom shapes (1 unit = 10 mm)
+    useEffect(() => {
+      const encGroup = enclosureGroupRef.current;
+      if (!encGroup) return;
+      encGroup.clear();
+
+      const isWire = renderMode === "wireframe";
+      const isTrans = renderMode === "translucent";
+
+      if (showEnclosure && enclosureConfig?.enabled) {
+        const w = (enclosureConfig.width_mm || 80) / 10;
+        const l = (enclosureConfig.length_mm || 70) / 10;
+        const h = (enclosureConfig.height_mm || 28) / 10;
+        const wall = (enclosureConfig.wall_mm || 2.4) / 10;
+        const floorH = (enclosureConfig.floor_mm || 2.4) / 10;
+        const cx = ((enclosureConfig.center_mm?.[0] ?? 0) as number) / 10;
+        const cy = ((enclosureConfig.center_mm?.[1] ?? 0) as number) / 10;
+
+        const shellMat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(enclosureConfig.color_hex || "#38bdf8"),
+          roughness: 0.35,
+          metalness: 0.1,
+          transparent: isTrans || !isWire,
+          opacity: isTrans ? 0.28 : isWire ? 1.0 : 0.72,
+          wireframe: isWire,
+          side: THREE.DoubleSide,
+        });
+
+        // Base floor plate (behind PCB at z = -0.75)
+        const baseZ = -0.75;
+        const baseMesh = new THREE.Mesh(new THREE.BoxGeometry(w, l, floorH), shellMat);
+        baseMesh.position.set(cx, cy, baseZ);
+        encGroup.add(baseMesh);
+
+        if (enclosureConfig.style !== "mounting_plate_bracket") {
+          const wallH =
+            enclosureConfig.style === "open_tray_cradle" ? Math.max(0.6, (h - floorH) * 0.48) : h - floorH;
+          const zMid = baseZ + floorH * 0.5 + wallH * 0.5;
+          const frontWall = new THREE.Mesh(new THREE.BoxGeometry(w, wall, wallH), shellMat);
+          frontWall.position.set(cx, cy - (l - wall) * 0.5, zMid);
+          const backWall = new THREE.Mesh(new THREE.BoxGeometry(w, wall, wallH), shellMat);
+          backWall.position.set(cx, cy + (l - wall) * 0.5, zMid);
+          const innerL = Math.max(0.2, l - 2 * wall);
+          const leftWall = new THREE.Mesh(new THREE.BoxGeometry(wall, innerL, wallH), shellMat);
+          leftWall.position.set(cx - (w - wall) * 0.5, cy, zMid);
+          const rightWall = new THREE.Mesh(new THREE.BoxGeometry(wall, innerL, wallH), shellMat);
+          rightWall.position.set(cx + (w - wall) * 0.5, cy, zMid);
+          encGroup.add(frontWall, backWall, leftWall, rightWall);
+        }
+
+        // Mounting standoff bosses
+        if (enclosureConfig.include_standoffs) {
+          const stH = (enclosureConfig.standoff_height_mm || 5.0) / 10;
+          const bossMat = new THREE.MeshStandardMaterial({
+            color: 0xf59e0b,
+            roughness: 0.4,
+            wireframe: isWire,
+            transparent: isTrans,
+            opacity: isTrans ? 0.5 : 0.95,
+          });
+          const standoffs = enclosureConfig.standoffs_mm || [];
+          for (const st of standoffs) {
+            const boss = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, stH, 16), bossMat);
+            boss.rotation.x = Math.PI / 2;
+            boss.position.set((st.x_mm || 0) / 10, (st.y_mm || 0) / 10, baseZ + floorH * 0.5 + stH * 0.5);
+            encGroup.add(boss);
+          }
+        }
+
+        // Optional Snap-Fit Lid with live explode offset
+        if (
+          enclosureConfig.include_lid &&
+          (enclosureConfig.style === "box_with_lid" || enclosureConfig.style === "snap_fit_case")
+        ) {
+          const explode = (enclosureConfig.lid_explode_mm || 0) / 10;
+          const lidMat = new THREE.MeshStandardMaterial({
+            color: 0x22d3ee,
+            roughness: 0.3,
+            transparent: true,
+            opacity: isTrans ? 0.22 : 0.45,
+            wireframe: isWire,
+          });
+          const lid = new THREE.Mesh(new THREE.BoxGeometry(w, l, floorH), lidMat);
+          lid.position.set(cx, cy, baseZ + h + explode);
+          encGroup.add(lid);
+        }
+      }
+
+      // Custom 3D-printable shapes (including photo_relief)
+      for (const shp of customShapes || []) {
+        const sx = (shp.size_mm?.[0] || 24) / 10;
+        const sy = (shp.size_mm?.[1] || 24) / 10;
+        const sz = (shp.size_mm?.[2] || 10) / 10;
+        const px = (shp.position_mm?.[0] || 0) / 10;
+        const py = (shp.position_mm?.[1] || 0) / 10;
+        const pz = (shp.position_mm?.[2] || 0) / 10;
+        const mat = new THREE.MeshStandardMaterial({
+          color: new THREE.Color(shp.color_hex || "#f97316"),
+          roughness: 0.4,
+          metalness: 0.12,
+          transparent: isTrans,
+          opacity: isTrans ? 0.45 : 0.92,
+          wireframe: isWire,
+        });
+        let mesh: THREE.Object3D;
+        if (shp.kind === "cylinder" || shp.kind === "standoff_post") {
+          const cyl = new THREE.Mesh(new THREE.CylinderGeometry(sx * 0.5, sx * 0.5, sz, 24), mat);
+          cyl.rotation.x = Math.PI / 2;
+          mesh = cyl;
+        } else if (shp.kind === "bracket_l") {
+          const bg = new THREE.Group();
+          const b1 = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, 0.24), mat);
+          const b2 = new THREE.Mesh(new THREE.BoxGeometry(sx, 0.24, sz), mat);
+          b2.position.set(0, -sy * 0.5 + 0.12, sz * 0.5);
+          bg.add(b1, b2);
+          mesh = bg;
+        } else {
+          mesh = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
+        }
+        mesh.position.set(px, py, pz);
+        encGroup.add(mesh);
+      }
+    }, [enclosureConfig, customShapes, renderMode, showEnclosure]);
+
+    // Apply Solid / Translucent / Wireframe render mode to board & parts
+    useEffect(() => {
+      const applyMode = (root: THREE.Object3D | null) => {
+        if (!root) return;
+        root.traverse((obj) => {
+          if (obj instanceof THREE.Mesh && obj.material instanceof THREE.MeshStandardMaterial) {
+            obj.material.wireframe = renderMode === "wireframe";
+            if (renderMode === "translucent") {
+              obj.material.transparent = true;
+              obj.material.opacity = 0.55;
+            } else {
+              obj.material.opacity = 1.0;
+            }
+          }
+        });
+      };
+      applyMode(boardGroupRef.current);
+      applyMode(attachmentsGroupRef.current);
+    }, [renderMode, attachments]);
 
     useEffect(() => {
       pinMeshesRef.current.forEach((mesh, pid) => {
@@ -742,6 +980,7 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
       const group = attachmentsGroupRef.current;
       if (!group) return;
       group.clear();
+      attachmentObjByIdRef.current.clear();
       servoHornsRef.current = [];
       neopixelMatsRef.current = [];
 
@@ -752,38 +991,51 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
         const spec = accById.get(att.accessory_id);
         if (!spec) return;
         const spread = Math.max(1, attachments.length - 1);
-        const xPos = attachments.length === 1 ? 0 : -2.6 + (idx / spread) * 5.2;
-        const yPos = -3.05;
-        const zPos = 1.65 + (idx % 2) * 0.55;
+        const fallbackX = attachments.length === 1 ? 0 : -2.6 + (idx / spread) * 5.2;
+        const pos = att.position_mm;
+        const xPos = pos && pos.length >= 3 ? pos[0] / 10 : fallbackX;
+        const yPos = pos && pos.length >= 3 ? pos[1] / 10 : -3.4;
+        const zPos = pos && pos.length >= 3 ? pos[2] / 10 : 0.4 + (idx % 2) * 0.35;
 
         const built = makeAccessory3D(spec, simNeopixelHex);
         built.group.position.set(xPos, yPos, zPos);
+        if (att.rotation_deg && att.rotation_deg.length >= 3) {
+          built.group.rotation.set(
+            THREE.MathUtils.degToRad(att.rotation_deg[0]),
+            THREE.MathUtils.degToRad(att.rotation_deg[1]),
+            THREE.MathUtils.degToRad(att.rotation_deg[2])
+          );
+        }
+        built.group.userData = { attachmentId: att.id };
         group.add(built.group);
+        attachmentObjByIdRef.current.set(att.id, built.group);
         if (built.servoHorn) servoHornsRef.current.push(built.servoHorn);
         if (built.neopixelMats) neopixelMatsRef.current.push(...built.neopixelMats);
         if (built.clickableTrigger) interactiveMeshesRef.current.push(built.clickableTrigger);
 
-        spec.wires.forEach((wire, wIdx) => {
-          const targetPinId =
-            wire.to_role === "signal"
-              ? att.pin
-              : wire.to_role === "secondary"
-                ? att.secondary_pin || spec.secondary_pin || "P2"
-                : wire.to_role;
-          const startX = pinXById.get(targetPinId) ?? 0;
-          const start = new THREE.Vector3(startX, -2.05, 0.06);
-          const end = new THREE.Vector3(xPos + (wIdx - 1) * 0.22, yPos + 0.45, zPos);
-          const mid1 = new THREE.Vector3(startX, -2.65, 0.55 + wIdx * 0.12);
-          const mid2 = new THREE.Vector3(end.x, -2.55, zPos * 0.72);
-          const curve = new THREE.CatmullRomCurve3([start, mid1, mid2, end]);
-          const tube = new THREE.Mesh(
-            new THREE.TubeGeometry(curve, 24, 0.042, 8, false),
-            new THREE.MeshStandardMaterial({ color: wire.color, roughness: 0.4 })
-          );
-          group.add(tube);
-        });
+        if (showWires) {
+          spec.wires.forEach((wire, wIdx) => {
+            const targetPinId =
+              wire.to_role === "signal"
+                ? att.pin
+                : wire.to_role === "secondary"
+                  ? att.secondary_pin || spec.secondary_pin || "P2"
+                  : wire.to_role;
+            const startX = pinXById.get(targetPinId) ?? 0;
+            const start = new THREE.Vector3(startX, -2.05, 0.06);
+            const end = new THREE.Vector3(xPos + (wIdx - 1) * 0.22, yPos + 0.45, zPos);
+            const mid1 = new THREE.Vector3(startX, (start.y + end.y) * 0.5, 0.6 + wIdx * 0.12);
+            const mid2 = new THREE.Vector3(end.x, (start.y + end.y) * 0.5, zPos + 0.45);
+            const curve = new THREE.CatmullRomCurve3([start, mid1, mid2, end]);
+            const tube = new THREE.Mesh(
+              new THREE.TubeGeometry(curve, 24, 0.042, 8, false),
+              new THREE.MeshStandardMaterial({ color: wire.color, roughness: 0.4 })
+            );
+            group.add(tube);
+          });
+        }
       });
-    }, [attachments, accessories, pins]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [attachments, accessories, pins, showWires]); // eslint-disable-line react-hooks/exhaustive-deps
 
     return <div ref={mountRef} className="h-full w-full" />;
   }

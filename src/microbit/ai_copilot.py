@@ -21,6 +21,11 @@ from typing import Any, Dict, List, Optional, Sequence
 import httpx
 
 from src.microbit.catalog import ACCESSORY_BY_ID, MICROBIT_ACCESSORIES, MICROBIT_V2_PINS
+from src.microbit.enclosure_cad import (
+    auto_fit_enclosure_config,
+    sanitize_custom_shapes,
+    sanitize_enclosure_config,
+)
 
 MAX_LLM_RETRIES = 3
 
@@ -379,17 +384,73 @@ def apply_deterministic_copilot_fallback(project: Dict[str, Any], user_message: 
         )
         changes.append("configured Touch Logo reaction")
 
+    enclosure_cfg = sanitize_enclosure_config(project.get("enclosure_config"))
+    custom_shapes = sanitize_custom_shapes(project.get("custom_shapes"))
+
+    # Detect 3D-printable enclosure / mechanical CAD requests
+    if any(w in low for w in ("enclosure", "case", "shell", "housing", "3d print", "stl", "stand", "tray", "cradle", "box")):
+        enclosure_cfg = auto_fit_enclosure_config(
+            str(project.get("board_id") or "microbit_v2"),
+            attachments,
+            custom_shapes,
+            existing=enclosure_cfg,
+        )
+        if "snap" in low:
+            enclosure_cfg["style"] = "snap_fit_case"
+        elif "stand" in low or "desk" in low:
+            enclosure_cfg["style"] = "desk_stand"
+        elif "tray" in low or "cradle" in low or "open" in low:
+            enclosure_cfg["style"] = "open_tray_cradle"
+        elif "plate" in low or "mount" in low:
+            enclosure_cfg["style"] = "mounting_plate_bracket"
+        else:
+            enclosure_cfg["style"] = "box_with_lid"
+        wall_m = re.search(r"(\d+(?:\.\d+)?)\s*mm\s*(?:wall|thick)", low)
+        if wall_m:
+            enclosure_cfg["wall_mm"] = round(max(1.2, min(6.0, float(wall_m.group(1)))), 2)
+        if "vent" in low or "slot" in low:
+            enclosure_cfg["include_vent_slots"] = True
+        if "no lid" in low or "without lid" in low:
+            enclosure_cfg["include_lid"] = False
+        changes.append(
+            f"auto-fitted {enclosure_cfg['style'].replace('_', ' ')} enclosure ({enclosure_cfg['width_mm']}×{enclosure_cfg['length_mm']}×{enclosure_cfg['height_mm']} mm, {enclosure_cfg['wall_mm']} mm wall)"
+        )
+
+    if any(w in low for w in ("bracket", "standoff", "pillar", "cylinder")) and "enclosure" not in low:
+        kind = "bracket_l" if "bracket" in low else ("standoff_post" if "standoff" in low else "cylinder")
+        dim_m = re.search(r"(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)(?:\s*[x×]\s*(\d+(?:\.\d+)?))?", low)
+        sz = (
+            [float(dim_m.group(1)), float(dim_m.group(2)), float(dim_m.group(3) or 12.0)]
+            if dim_m
+            else [24.0, 20.0, 12.0]
+        )
+        custom_shapes = sanitize_custom_shapes(
+            [
+                *custom_shapes,
+                {
+                    "name": f"AI {kind.replace('_', ' ').title()}",
+                    "kind": kind,
+                    "size_mm": sz,
+                    "position_mm": [0.0, 36.0, 0.0],
+                    "color_hex": picked_color or "#f97316",
+                },
+            ]
+        )
+        changes.append(f"added 3D-printable {kind} ({sz[0]}×{sz[1]}×{sz[2]} mm)")
+
     clean_rules = _sanitize_sim_rules(rules)
     code = compile_rules_to_micropython(attachments, clean_rules, project_name=str(project.get("name") or "Prototype"))
     reply = (
-        "Updated your 3D micro:bit twin: " + "; ".join(changes) + ". Test it right now in the 3D canvas!"
+        "Updated your 3D twin & CAD model: " + "; ".join(changes) + ". Inspect it in Physical, Schematic, or Structure view!"
         if changes
-        else "I've refreshed your 3D simulator rules and MicroPython code. Try clicking Button A, Button B, or Simulate Lift below the 3D board!"
+        else "I've refreshed your 3D simulator rules and MicroPython code. Try clicking Button A, Button B, or asking me to build a 3D-printable enclosure!"
     )
     return {
         "assistant_reply": reply,
         "attachments": attachments,
         "sim_rules": clean_rules,
+        "enclosure_config": enclosure_cfg,
+        "custom_shapes": custom_shapes,
         "code": code,
         "provider": "local_copilot",
     }
@@ -491,15 +552,27 @@ async def run_microbit_copilot_turn(
                 attachments = list(project.get("attachments") or [])
 
             sim_rules = _sanitize_sim_rules(parsed.get("sim_rules") or project.get("sim_rules") or [])
+            enclosure_cfg = (
+                sanitize_enclosure_config(parsed.get("enclosure_config"))
+                if isinstance(parsed.get("enclosure_config"), dict)
+                else sanitize_enclosure_config(project.get("enclosure_config"))
+            )
+            custom_shapes = (
+                sanitize_custom_shapes(parsed.get("custom_shapes"))
+                if isinstance(parsed.get("custom_shapes"), list)
+                else sanitize_custom_shapes(project.get("custom_shapes"))
+            )
             code = compile_rules_to_micropython(
                 attachments,
                 sim_rules,
                 project_name=str(project.get("name") or "Prototype"),
             )
             return {
-                "assistant_reply": str(parsed.get("assistant_reply") or "Updated your 3D micro:bit twin and MicroPython code!"),
+                "assistant_reply": str(parsed.get("assistant_reply") or "Updated your 3D twin, CAD model, and code!"),
                 "attachments": attachments,
                 "sim_rules": sim_rules,
+                "enclosure_config": enclosure_cfg,
+                "custom_shapes": custom_shapes,
                 "code": code,
                 "provider": openrouter_model,
             }

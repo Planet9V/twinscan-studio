@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import sys
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from src.microbit.bridge import (
@@ -23,6 +25,13 @@ from src.microbit.catalog import (
     MICROBIT_V2_PINS,
     STARTER_TEMPLATES,
     generate_prototype_code,
+)
+from src.microbit.enclosure_cad import (
+    auto_fit_enclosure_config,
+    create_photo_shape_spec,
+    export_enclosure_stl,
+    sanitize_custom_shapes,
+    sanitize_enclosure_config,
 )
 from src.microbit.project_store import MicrobitProjectStore
 
@@ -50,24 +59,39 @@ class CreateMicrobitProjectRequest(BaseModel):
 
 
 class AttachmentItem(BaseModel):
-    """Accessory attached to specific board pins."""
+    """Accessory attached to specific board pins with 1:1 mm 3D workbench placement."""
 
     id: Optional[str] = Field(default=None, max_length=32)
     accessory_id: str = Field(..., max_length=48)
     label: Optional[str] = Field(default=None, max_length=80)
     pin: str = Field(default="P0", max_length=16)
     secondary_pin: Optional[str] = Field(default=None, max_length=16)
+    position_mm: Optional[List[float]] = Field(default=None)
+    rotation_deg: Optional[List[float]] = Field(default=None)
 
 
 class UpdateMicrobitProjectRequest(BaseModel):
-    """Update a hardware project's board, metadata, attached accessories, sim_rules, or code."""
+    """Update a hardware project's board, metadata, attached accessories, CAD enclosure, or code."""
 
     name: Optional[str] = Field(default=None, min_length=1, max_length=96)
     board_id: Optional[str] = Field(default=None, max_length=32)
     description: Optional[str] = Field(default=None, max_length=240)
     attachments: Optional[List[AttachmentItem]] = Field(default=None)
     sim_rules: Optional[List[Dict[str, Any]]] = Field(default=None)
+    enclosure_config: Optional[Dict[str, Any]] = Field(default=None)
+    custom_shapes: Optional[List[Dict[str, Any]]] = Field(default=None)
     code: Optional[str] = Field(default=None, max_length=20000)
+
+
+class PhotoShapeRequest(BaseModel):
+    """Create a 3D-printable relief shape from a base64-encoded photo and target mm dimensions."""
+
+    name: str = Field(default="Photo 3D Shape", max_length=64)
+    image_b64: str = Field(..., min_length=16)
+    width_mm: float = Field(default=42.0, ge=5.0, le=250.0)
+    length_mm: float = Field(default=42.0, ge=5.0, le=250.0)
+    height_mm: float = Field(default=8.0, ge=2.0, le=80.0)
+    invert: bool = Field(default=False)
 
 
 class CopilotChatRequest(BaseModel):
@@ -137,20 +161,27 @@ async def update_microbit_project(
             spec = ACCESSORY_BY_ID.get(item.accessory_id)
             if not spec:
                 continue
-            cleaned.append(
-                {
-                    "id": item.id or f"att_{uuid.uuid4().hex[:6]}",
-                    "accessory_id": item.accessory_id,
-                    "label": (item.label or spec["name"]).strip(),
-                    "pin": item.pin.upper(),
-                    "secondary_pin": item.secondary_pin.upper() if item.secondary_pin else spec.get("secondary_pin"),
-                }
-            )
+            entry: Dict[str, Any] = {
+                "id": item.id or f"att_{uuid.uuid4().hex[:6]}",
+                "accessory_id": item.accessory_id,
+                "label": (item.label or spec["name"]).strip(),
+                "pin": item.pin.upper(),
+                "secondary_pin": item.secondary_pin.upper() if item.secondary_pin else spec.get("secondary_pin"),
+            }
+            if item.position_mm and len(item.position_mm) >= 3:
+                entry["position_mm"] = [round(float(v), 1) for v in item.position_mm[:3]]
+            if item.rotation_deg and len(item.rotation_deg) >= 3:
+                entry["rotation_deg"] = [round(float(v), 1) for v in item.rotation_deg[:3]]
+            cleaned.append(entry)
         proj["attachments"] = cleaned
     if payload.code is not None:
         proj["code"] = payload.code
     if payload.sim_rules is not None:
         proj["sim_rules"] = payload.sim_rules
+    if payload.enclosure_config is not None:
+        proj["enclosure_config"] = sanitize_enclosure_config(payload.enclosure_config)
+    if payload.custom_shapes is not None:
+        proj["custom_shapes"] = sanitize_custom_shapes(payload.custom_shapes)
     saved = store.save_project(proj)
     return {"ok": True, "project": saved}
 
@@ -184,6 +215,10 @@ async def chat_with_microbit_copilot(
     proj["attachments"] = res["attachments"]
     proj["sim_rules"] = res["sim_rules"]
     proj["code"] = res["code"]
+    if isinstance(res.get("enclosure_config"), dict):
+        proj["enclosure_config"] = res["enclosure_config"]
+    if isinstance(res.get("custom_shapes"), list):
+        proj["custom_shapes"] = res["custom_shapes"]
     history = list(proj.get("chat_history") or [])
     history.append({"role": "user", "text": payload.message})
     history.append({"role": "assistant", "text": res["assistant_reply"]})
@@ -220,6 +255,84 @@ async def generate_project_code(request: Request, project_id: str) -> Dict[str, 
     proj["code"] = code
     saved = store.save_project(proj)
     return {"ok": True, "code": code, "project": saved}
+
+
+@router.post("/projects/{project_id}/enclosure/auto-fit")
+async def auto_fit_project_enclosure(request: Request, project_id: str) -> Dict[str, Any]:
+    """Auto-fit a parametric 3D-printable enclosure around the project's live 3D hardware layout."""
+    store = _get_store(request)
+    proj = store.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Hardware project not found.")
+    fitted = auto_fit_enclosure_config(
+        str(proj.get("board_id") or "microbit_v2"),
+        proj.get("attachments") or [],
+        proj.get("custom_shapes") or [],
+        existing=proj.get("enclosure_config"),
+    )
+    proj["enclosure_config"] = fitted
+    saved = store.save_project(proj)
+    return {"ok": True, "enclosure_config": saved["enclosure_config"], "project": saved}
+
+
+@router.post("/projects/{project_id}/enclosure/export.stl")
+async def export_project_enclosure_stl(request: Request, project_id: str) -> Response:
+    """Export the project's parametric enclosure and custom 3D shapes as a slicer-ready binary STL (mm)."""
+    store = _get_store(request)
+    proj = store.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Hardware project not found.")
+    cfg = proj.get("enclosure_config") or auto_fit_enclosure_config(
+        str(proj.get("board_id") or "microbit_v2"),
+        proj.get("attachments") or [],
+        proj.get("custom_shapes") or [],
+    )
+    stl_bytes, stats = await asyncio.to_thread(
+        export_enclosure_stl,
+        cfg,
+        proj.get("custom_shapes") or [],
+    )
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in str(proj.get("name") or "enclosure"))[:40]
+    return Response(
+        content=stl_bytes,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}_enclosure.stl"',
+            "X-STL-Stats": json.dumps(stats),
+            "Access-Control-Expose-Headers": "X-STL-Stats, Content-Disposition",
+        },
+    )
+
+
+@router.post("/projects/{project_id}/shapes/from-photo")
+async def create_shape_from_photo(
+    request: Request,
+    project_id: str,
+    payload: PhotoShapeRequest,
+) -> Dict[str, Any]:
+    """Convert an uploaded reference photo into a metric 3D-printable relief shape in the project."""
+    store = _get_store(request)
+    proj = store.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="Hardware project not found.")
+    try:
+        raw_b64 = payload.image_b64.split(",")[-1]
+        img_bytes = base64.b64decode(raw_b64)
+        shape = create_photo_shape_spec(
+            img_bytes,
+            name=payload.name,
+            width_mm=payload.width_mm,
+            length_mm=payload.length_mm,
+            height_mm=payload.height_mm,
+            invert=payload.invert,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Photo-to-3D conversion failed: {exc}") from exc
+    shapes = list(proj.get("custom_shapes") or [])
+    shapes.append(shape)
+    proj["custom_shapes"] = sanitize_custom_shapes(shapes)
+    saved = store.save_project(proj)
+    return {"ok": True, "shape": shape, "project": saved}
 
 
 @router.get("/hardware/status")

@@ -71,3 +71,18 @@ def test_microbit_lab_api_projects_and_catalog() -> None:
     assert r_gen.status_code == 200
     assert "MOTION_DETECTED" in r_gen.json()["code"]
     assert "music.play" in r_gen.json()["code"]
+
+    r_chat = client.post(
+        f"/api/microbit/projects/{pid}/chat",
+        json={"message": "Attach a servo and on lift say 'Weeee!' and on left button play a chime"},
+    )
+    assert r_chat.status_code == 200
+    body = r_chat.json()
+    assert body["ok"] is True
+    proj = body["project"]
+    assert any(a["accessory_id"] == "sg90_servo" for a in proj["attachments"])
+    triggers = {r["trigger"]: r for r in proj["sim_rules"]}
+    assert "lift" in triggers and "Wee" in triggers["lift"]["speak_text"]
+    assert "button_a" in triggers and triggers["button_a"]["sound_effect"] == "chime"
+    assert "speech.pronounce" in proj["code"]
+    assert len(proj["chat_history"]) == 2

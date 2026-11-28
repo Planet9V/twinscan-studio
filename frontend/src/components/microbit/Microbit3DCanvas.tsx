@@ -8,10 +8,12 @@ import type {
   MicrobitAttachment,
   MicrobitLiveSensors,
   MicrobitPinSpec,
+  MicrobitTrigger,
 } from "@/lib/microbitApi";
 
 export interface Microbit3DHandle {
   setView: (view: "front" | "back" | "iso" | "top") => void;
+  playMotionPulse: (kind: "lift" | "tilt_left" | "tilt_right" | "shake") => void;
 }
 
 interface Microbit3DCanvasProps {
@@ -21,19 +23,91 @@ interface Microbit3DCanvasProps {
   selectedPinId: string | null;
   liveSensors: MicrobitLiveSensors | null;
   liveTiltEnabled: boolean;
+  ledIcon: string;
+  simServoAngle: number;
+  simNeopixelHex: string;
   onSelectPin: (pinId: string) => void;
+  onVirtualTrigger: (trigger: MicrobitTrigger) => void;
 }
 
-// Happy face 5x5 matrix pattern
-const SMILE_MATRIX = [
-  [0, 1, 0, 1, 0],
-  [0, 1, 0, 1, 0],
-  [0, 0, 0, 0, 0],
-  [1, 0, 0, 0, 1],
-  [0, 1, 1, 1, 0],
-];
+const LED_ICONS: Record<string, number[][]> = {
+  HAPPY: [
+    [0, 1, 0, 1, 0],
+    [0, 1, 0, 1, 0],
+    [0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 1],
+    [0, 1, 1, 1, 0],
+  ],
+  HEART: [
+    [0, 1, 0, 1, 0],
+    [1, 1, 1, 1, 1],
+    [1, 1, 1, 1, 1],
+    [0, 1, 1, 1, 0],
+    [0, 0, 1, 0, 0],
+  ],
+  SURPRISED: [
+    [0, 1, 0, 1, 0],
+    [0, 0, 0, 0, 0],
+    [0, 0, 1, 0, 0],
+    [0, 1, 0, 1, 0],
+    [0, 0, 1, 0, 0],
+  ],
+  SAD: [
+    [0, 1, 0, 1, 0],
+    [0, 1, 0, 1, 0],
+    [0, 0, 0, 0, 0],
+    [0, 1, 1, 1, 0],
+    [1, 0, 0, 0, 1],
+  ],
+  CONFUSED: [
+    [0, 1, 0, 1, 0],
+    [0, 0, 0, 0, 0],
+    [0, 1, 0, 1, 0],
+    [1, 0, 1, 0, 1],
+    [0, 0, 0, 0, 0],
+  ],
+  ARROW_N: [
+    [0, 0, 1, 0, 0],
+    [0, 1, 1, 1, 0],
+    [1, 0, 1, 0, 1],
+    [0, 0, 1, 0, 0],
+    [0, 0, 1, 0, 0],
+  ],
+  ARROW_E: [
+    [0, 0, 1, 0, 0],
+    [0, 0, 0, 1, 0],
+    [1, 1, 1, 1, 1],
+    [0, 0, 0, 1, 0],
+    [0, 0, 1, 0, 0],
+  ],
+  ARROW_W: [
+    [0, 0, 1, 0, 0],
+    [0, 1, 0, 0, 0],
+    [1, 1, 1, 1, 1],
+    [0, 1, 0, 0, 0],
+    [0, 0, 1, 0, 0],
+  ],
+  YES: [
+    [0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 1],
+    [0, 0, 0, 1, 0],
+    [1, 0, 1, 0, 0],
+    [0, 1, 0, 0, 0],
+  ],
+  NO: [
+    [1, 0, 0, 0, 1],
+    [0, 1, 0, 1, 0],
+    [0, 0, 1, 0, 0],
+    [0, 1, 0, 1, 0],
+    [1, 0, 0, 0, 1],
+  ],
+};
 
-function makeAccessory3D(spec: MicrobitAccessorySpec): THREE.Group {
+function makeAccessory3D(spec: MicrobitAccessorySpec, neopixelHex: string): {
+  group: THREE.Group;
+  servoHorn?: THREE.Group;
+  neopixelMats?: THREE.MeshStandardMaterial[];
+} {
   const g = new THREE.Group();
   const baseColor = new THREE.Color(spec.color_hex || "#38bdf8");
 
@@ -42,48 +116,59 @@ function makeAccessory3D(spec: MicrobitAccessorySpec): THREE.Group {
       new THREE.BoxGeometry(1.1, 1.15, 0.55),
       new THREE.MeshStandardMaterial({ color: 0x2563eb, roughness: 0.4, metalness: 0.15 })
     );
-    const horn = new THREE.Mesh(
-      new THREE.BoxGeometry(0.9, 0.16, 0.12),
-      new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.3 })
-    );
-    horn.position.set(0.18, 0.65, 0.1);
+    const hornPivot = new THREE.Group();
+    hornPivot.position.set(0, 0.62, 0.1);
     const hub = new THREE.Mesh(
       new THREE.CylinderGeometry(0.18, 0.18, 0.2, 16),
       new THREE.MeshStandardMaterial({ color: 0xe2e8f0 })
     );
-    hub.position.set(0, 0.62, 0.1);
-    g.add(body, horn, hub);
-  } else if (spec.id === "neopixel_8") {
+    const arm = new THREE.Mesh(
+      new THREE.BoxGeometry(0.95, 0.16, 0.12),
+      new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.3 })
+    );
+    arm.position.set(0.32, 0.04, 0);
+    hornPivot.add(hub, arm);
+    g.add(body, hornPivot);
+    return { group: g, servoHorn: hornPivot };
+  }
+
+  if (spec.id === "neopixel_8") {
     const strip = new THREE.Mesh(
       new THREE.BoxGeometry(2.4, 0.35, 0.12),
       new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 })
     );
     g.add(strip);
-    const colors = [0xef4444, 0xf97316, 0xfacc15, 0x22c55e, 0x06b6d4, 0x3b82f6, 0xa855f7, 0xec4899];
+    const mats: THREE.MeshStandardMaterial[] = [];
+    const col = new THREE.Color(neopixelHex || "#22d3ee");
     for (let i = 0; i < 8; i++) {
-      const led = new THREE.Mesh(
-        new THREE.BoxGeometry(0.18, 0.18, 0.14),
-        new THREE.MeshStandardMaterial({
-          color: colors[i],
-          emissive: colors[i],
-          emissiveIntensity: 0.85,
-        })
-      );
+      const m = new THREE.MeshStandardMaterial({
+        color: col,
+        emissive: col,
+        emissiveIntensity: 1.0,
+      });
+      mats.push(m);
+      const led = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.18, 0.14), m);
       led.position.set(-1.05 + i * 0.3, 0, 0.04);
       g.add(led);
     }
-  } else if (spec.id === "oled_ssd1306") {
+    return { group: g, neopixelMats: mats };
+  }
+
+  if (spec.id === "oled_ssd1306") {
     const pcb = new THREE.Mesh(
       new THREE.BoxGeometry(1.4, 1.1, 0.14),
       new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.4 })
     );
     const screen = new THREE.Mesh(
       new THREE.PlaneGeometry(1.15, 0.68),
-      new THREE.MeshStandardMaterial({ color: 0x0ea5e9, emissive: 0x0284c7, emissiveIntensity: 0.45 })
+      new THREE.MeshStandardMaterial({ color: 0x0ea5e9, emissive: 0x0284c7, emissiveIntensity: 0.5 })
     );
     screen.position.set(0, 0.04, 0.08);
     g.add(pcb, screen);
-  } else if (spec.id === "hcsr04_ultrasonic") {
+    return { group: g };
+  }
+
+  if (spec.id === "hcsr04_ultrasonic") {
     const pcb = new THREE.Mesh(
       new THREE.BoxGeometry(1.8, 0.85, 0.14),
       new THREE.MeshStandardMaterial({ color: 0x1d4ed8, roughness: 0.45 })
@@ -98,7 +183,10 @@ function makeAccessory3D(spec: MicrobitAccessorySpec): THREE.Group {
       cyl.position.set(sx, 0, 0.22);
       g.add(cyl);
     }
-  } else if (spec.id === "external_speaker") {
+    return { group: g };
+  }
+
+  if (spec.id === "external_speaker") {
     const housing = new THREE.Mesh(
       new THREE.CylinderGeometry(0.65, 0.55, 0.42, 24),
       new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.4 })
@@ -111,36 +199,58 @@ function makeAccessory3D(spec: MicrobitAccessorySpec): THREE.Group {
     cone.rotation.x = Math.PI / 2;
     cone.position.z = 0.16;
     g.add(housing, cone);
-  } else {
-    const mod = new THREE.Mesh(
-      new THREE.BoxGeometry(1.2, 0.9, 0.28),
-      new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.45, metalness: 0.15 })
-    );
-    const dome = new THREE.Mesh(
-      new THREE.SphereGeometry(0.32, 16, 12),
-      new THREE.MeshStandardMaterial({ color: 0xf8fafc, transparent: true, opacity: 0.85 })
-    );
-    dome.position.z = 0.16;
-    g.add(mod, dome);
+    return { group: g };
   }
-  return g;
+
+  const mod = new THREE.Mesh(
+    new THREE.BoxGeometry(1.2, 0.9, 0.28),
+    new THREE.MeshStandardMaterial({ color: baseColor, roughness: 0.45, metalness: 0.15 })
+  );
+  const dome = new THREE.Mesh(
+    new THREE.SphereGeometry(0.32, 16, 12),
+    new THREE.MeshStandardMaterial({ color: 0xf8fafc, transparent: true, opacity: 0.85 })
+  );
+  dome.position.z = 0.16;
+  g.add(mod, dome);
+  return { group: g };
 }
 
 export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCanvasProps>(
   function Microbit3DCanvas(
-    { pins, accessories, attachments, selectedPinId, liveSensors, liveTiltEnabled, onSelectPin },
+    {
+      pins,
+      accessories,
+      attachments,
+      selectedPinId,
+      liveSensors,
+      liveTiltEnabled,
+      ledIcon,
+      simServoAngle,
+      simNeopixelHex,
+      onSelectPin,
+      onVirtualTrigger,
+    },
     ref
   ) {
     const mountRef = useRef<HTMLDivElement | null>(null);
     const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
     const controlsRef = useRef<OrbitControls | null>(null);
     const boardGroupRef = useRef<THREE.Group | null>(null);
+    const ledMeshesRef = useRef<THREE.Mesh[][]>([]);
     const pinMeshesRef = useRef<Map<string, THREE.Mesh>>(new Map());
+    const interactiveMeshesRef = useRef<THREE.Object3D[]>([]);
     const attachmentsGroupRef = useRef<THREE.Group | null>(null);
+    const servoHornsRef = useRef<THREE.Group[]>([]);
+    const neopixelMatsRef = useRef<THREE.MeshStandardMaterial[]>([]);
+
     const onSelectPinRef = useRef(onSelectPin);
     onSelectPinRef.current = onSelectPin;
+    const onVirtualTriggerRef = useRef(onVirtualTrigger);
+    onVirtualTriggerRef.current = onVirtualTrigger;
 
     const targetRotRef = useRef<{ rx: number; rz: number }>({ rx: 0, rz: 0 });
+    const targetServoRadRef = useRef<number>(0);
+    const motionPulseRef = useRef<{ kind: string; t: number } | null>(null);
 
     useImperativeHandle(ref, () => ({
       setView: (view) => {
@@ -154,9 +264,38 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
         ctrl.target.set(0, -0.3, 0);
         ctrl.update();
       },
+      playMotionPulse: (kind) => {
+        motionPulseRef.current = { kind, t: 0 };
+      },
     }));
 
-    // Update live board tilt target from real micro:bit accelerometer
+    useEffect(() => {
+      targetServoRadRef.current = THREE.MathUtils.degToRad((simServoAngle - 90) * 1.0);
+    }, [simServoAngle]);
+
+    useEffect(() => {
+      const col = new THREE.Color(simNeopixelHex || "#22d3ee");
+      neopixelMatsRef.current.forEach((m) => {
+        m.color.copy(col);
+        m.emissive.copy(col);
+      });
+    }, [simNeopixelHex]);
+
+    // Update 5x5 LED matrix dynamically
+    useEffect(() => {
+      const pat = LED_ICONS[ledIcon?.toUpperCase()] || LED_ICONS.HAPPY;
+      const grid = ledMeshesRef.current;
+      for (let r = 0; r < grid.length; r++) {
+        for (let c = 0; c < grid[r].length; c++) {
+          const lit = pat[r]?.[c] === 1;
+          const mat = grid[r][c].material as THREE.MeshStandardMaterial;
+          mat.color.setHex(lit ? 0xff2a3c : 0x331118);
+          mat.emissive.setHex(lit ? 0xff1e32 : 0x000000);
+          mat.emissiveIntensity = lit ? 1.5 : 0;
+        }
+      }
+    }, [ledIcon]);
+
     useEffect(() => {
       if (!liveTiltEnabled || !liveSensors) {
         targetRotRef.current = { rx: 0, rz: 0 };
@@ -164,10 +303,7 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
       }
       const ax = Math.max(-1024, Math.min(1024, liveSensors.ax || 0)) / 1024;
       const ay = Math.max(-1024, Math.min(1024, liveSensors.ay || 0)) / 1024;
-      targetRotRef.current = {
-        rx: ay * 0.75,
-        rz: -ax * 0.75,
-      };
+      targetRotRef.current = { rx: ay * 0.75, rz: -ax * 0.75 };
     }, [liveSensors, liveTiltEnabled]);
 
     // 1. Build Three.js r187 micro:bit v2.2 PCB Scene
@@ -213,7 +349,6 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
       controls.target.set(0, -0.3, 0);
       controlsRef.current = controls;
 
-      // BBC micro:bit v2.2 PCB Group (1 unit = 10mm => 5.2 x 4.2 x 0.16)
       const board = new THREE.Group();
       boardGroupRef.current = board;
       scene.add(board);
@@ -223,56 +358,71 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
         new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.42, metalness: 0.25 })
       );
       board.add(pcb);
-
-      // Subtle cyan PCB trace border
-      const pcbEdge = new THREE.LineSegments(
-        new THREE.EdgesGeometry(new THREE.BoxGeometry(5.22, 4.22, 0.17)),
-        new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.35 })
+      board.add(
+        new THREE.LineSegments(
+          new THREE.EdgesGeometry(new THREE.BoxGeometry(5.22, 4.22, 0.17)),
+          new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.35 })
+        )
       );
-      board.add(pcbEdge);
 
-      // FRONT: 5x5 Red LED Matrix
+      // FRONT: Dynamic 5x5 Red LED Matrix
+      const ledGrid: THREE.Mesh[][] = [];
       for (let r = 0; r < 5; r++) {
+        const row: THREE.Mesh[] = [];
         for (let c = 0; c < 5; c++) {
-          const lit = SMILE_MATRIX[r][c] === 1;
+          const lit = LED_ICONS.HAPPY[r][c] === 1;
           const led = new THREE.Mesh(
             new THREE.BoxGeometry(0.14, 0.26, 0.06),
             new THREE.MeshStandardMaterial({
               color: lit ? 0xff2a3c : 0x331118,
               emissive: lit ? 0xff1e32 : 0x000000,
-              emissiveIntensity: lit ? 1.4 : 0,
+              emissiveIntensity: lit ? 1.5 : 0,
             })
           );
           led.position.set((c - 2) * 0.42, (2 - r) * 0.42 + 0.15, 0.1);
           board.add(led);
+          row.push(led);
         }
+        ledGrid.push(row);
       }
+      ledMeshesRef.current = ledGrid;
 
-      // FRONT: Button A (left) & Button B (right)
-      for (const bx of [-1.85, 1.85]) {
+      interactiveMeshesRef.current = [];
+
+      // FRONT: Clickable Button A (left) & Button B (right)
+      const btns: Array<{ x: number; trigger: MicrobitTrigger }> = [
+        { x: -1.85, trigger: "button_a" },
+        { x: 1.85, trigger: "button_b" },
+      ];
+      for (const b of btns) {
         const housing = new THREE.Mesh(
-          new THREE.BoxGeometry(0.62, 0.62, 0.12),
+          new THREE.BoxGeometry(0.66, 0.66, 0.12),
           new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.4 })
         );
-        housing.position.set(bx, 0.15, 0.12);
+        housing.position.set(b.x, 0.15, 0.12);
+        housing.userData = { virtualTrigger: b.trigger };
         const cap = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.2, 0.2, 0.14, 16),
+          new THREE.CylinderGeometry(0.22, 0.22, 0.16, 16),
           new THREE.MeshStandardMaterial({ color: 0x020617, roughness: 0.3 })
         );
         cap.rotation.x = Math.PI / 2;
-        cap.position.set(bx, 0.15, 0.18);
+        cap.position.set(b.x, 0.15, 0.19);
+        cap.userData = { virtualTrigger: b.trigger };
         board.add(housing, cap);
+        interactiveMeshesRef.current.push(housing, cap);
       }
 
-      // FRONT: Gold Capacitive Touch Logo (top center)
+      // FRONT: Clickable Gold Capacitive Touch Logo
       const logo = new THREE.Mesh(
-        new THREE.BoxGeometry(1.1, 0.52, 0.05),
+        new THREE.BoxGeometry(1.15, 0.54, 0.06),
         new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.85, roughness: 0.22 })
       );
       logo.position.set(0, 1.55, 0.09);
+      logo.userData = { virtualTrigger: "logo_touch" as MicrobitTrigger };
       board.add(logo);
+      interactiveMeshesRef.current.push(logo);
 
-      // FRONT: MEMS Mic Indicator LED (top right)
+      // MEMS Mic LED + Back MCU/Speaker/Ports
       const micLed = new THREE.Mesh(
         new THREE.SphereGeometry(0.08, 12, 12),
         new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0xef4444, emissiveIntensity: 0.9 })
@@ -280,14 +430,11 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
       micLed.position.set(1.25, 1.55, 0.11);
       board.add(micLed);
 
-      // BACK: nRF52833 MCU, 9mm Piezo Speaker, USB Micro-B, JST Battery
       const mcu = new THREE.Mesh(
         new THREE.BoxGeometry(0.75, 0.75, 0.09),
         new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.3, metalness: 0.4 })
       );
       mcu.position.set(-1.1, 0.2, -0.11);
-      board.add(mcu);
-
       const speakerBox = new THREE.Mesh(
         new THREE.BoxGeometry(0.95, 0.95, 0.24),
         new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.35 })
@@ -299,8 +446,6 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
       );
       speakerCone.rotation.x = Math.PI / 2;
       speakerCone.position.set(0.35, 0.15, -0.31);
-      board.add(speakerBox, speakerCone);
-
       const usbPort = new THREE.Mesh(
         new THREE.BoxGeometry(0.75, 0.48, 0.28),
         new THREE.MeshStandardMaterial({ color: 0xcbd5e1, metalness: 0.85, roughness: 0.2 })
@@ -311,52 +456,38 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
         new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.5 })
       );
       jstPort.position.set(1.55, 1.78, -0.26);
-      board.add(usbPort, jstPort);
+      board.add(mcu, speakerBox, speakerCone, usbPort, jstPort);
 
-      // EDGE CONNECTOR PINS (Clickable Gold Pads along bottom y = -1.78)
+      // Edge Connector Pins
       pinMeshesRef.current.clear();
-      const ringPins = [
-        { id: "P0", x: -1.75 },
-        { id: "P1", x: -0.875 },
-        { id: "P2", x: 0.0 },
-        { id: "3V", x: 0.875 },
-        { id: "GND", x: 1.75 },
+      const allPads = [
+        { id: "P0", x: -1.75, w: 0.54, h: 0.68, y: -1.78, c: 0xeab308 },
+        { id: "P1", x: -0.875, w: 0.54, h: 0.68, y: -1.78, c: 0xeab308 },
+        { id: "P2", x: 0.0, w: 0.54, h: 0.68, y: -1.78, c: 0xeab308 },
+        { id: "3V", x: 0.875, w: 0.54, h: 0.68, y: -1.78, c: 0xeab308 },
+        { id: "GND", x: 1.75, w: 0.54, h: 0.68, y: -1.78, c: 0xeab308 },
+        { id: "P8", x: -1.3, w: 0.14, h: 0.52, y: -1.84, c: 0xd97706 },
+        { id: "P12", x: -0.42, w: 0.14, h: 0.52, y: -1.84, c: 0xd97706 },
+        { id: "P13", x: 0.42, w: 0.14, h: 0.52, y: -1.84, c: 0xd97706 },
+        { id: "P19", x: 1.28, w: 0.14, h: 0.52, y: -1.84, c: 0xd97706 },
+        { id: "P20", x: 1.48, w: 0.14, h: 0.52, y: -1.84, c: 0xd97706 },
       ];
-      for (const rp of ringPins) {
+      for (const p of allPads) {
         const pad = new THREE.Mesh(
-          new THREE.BoxGeometry(0.54, 0.68, 0.19),
-          new THREE.MeshStandardMaterial({ color: 0xeab308, metalness: 0.85, roughness: 0.22 })
+          new THREE.BoxGeometry(p.w, p.h, 0.19),
+          new THREE.MeshStandardMaterial({ color: p.c, metalness: 0.85, roughness: 0.22 })
         );
-        pad.position.set(rp.x, -1.78, 0);
-        pad.userData = { pinId: rp.id };
+        pad.position.set(p.x, p.y, 0);
+        pad.userData = { pinId: p.id };
         board.add(pad);
-        pinMeshesRef.current.set(rp.id, pad);
-      }
-      // Small edge pins (P8, P12, P13, P19, P20)
-      const smallPins = [
-        { id: "P8", x: -1.3 },
-        { id: "P12", x: -0.42 },
-        { id: "P13", x: 0.42 },
-        { id: "P19", x: 1.28 },
-        { id: "P20", x: 1.48 },
-      ];
-      for (const sp of smallPins) {
-        const pad = new THREE.Mesh(
-          new THREE.BoxGeometry(0.14, 0.52, 0.19),
-          new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.85, roughness: 0.25 })
-        );
-        pad.position.set(sp.x, -1.84, 0);
-        pad.userData = { pinId: sp.id };
-        board.add(pad);
-        pinMeshesRef.current.set(sp.id, pad);
+        pinMeshesRef.current.set(p.id, pad);
+        interactiveMeshesRef.current.push(pad);
       }
 
-      // Attachments & 3D Jumper Wires Group
       const attGroup = new THREE.Group();
       attachmentsGroupRef.current = attGroup;
       scene.add(attGroup);
 
-      // Raycaster for clicking gold edge pins
       const raycaster = new THREE.Raycaster();
       const pointer = new THREE.Vector2();
       const onClick = (e: MouseEvent) => {
@@ -364,9 +495,14 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
         pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
         pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
         raycaster.setFromCamera(pointer, camera);
-        const hits = raycaster.intersectObjects(Array.from(pinMeshesRef.current.values()), false);
-        if (hits.length > 0 && hits[0].object.userData?.pinId) {
-          onSelectPinRef.current(String(hits[0].object.userData.pinId));
+        const hits = raycaster.intersectObjects(interactiveMeshesRef.current, false);
+        if (hits.length > 0) {
+          const ud = hits[0].object.userData;
+          if (ud?.virtualTrigger) {
+            onVirtualTriggerRef.current(ud.virtualTrigger as MicrobitTrigger);
+          } else if (ud?.pinId) {
+            onSelectPinRef.current(String(ud.pinId));
+          }
         }
       };
       renderer.domElement.addEventListener("click", onClick);
@@ -382,10 +518,37 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
       resizeObs.observe(container);
 
       let rafId = 0;
+      const clock = new THREE.Clock();
       const animate = () => {
         rafId = requestAnimationFrame(animate);
-        board.rotation.x += (targetRotRef.current.rx - board.rotation.x) * 0.12;
-        board.rotation.z += (targetRotRef.current.rz - board.rotation.z) * 0.12;
+        const dt = Math.min(0.05, clock.getDelta());
+
+        let pulseY = 0;
+        let pulseRz = 0;
+        if (motionPulseRef.current) {
+          motionPulseRef.current.t += dt;
+          const t = motionPulseRef.current.t;
+          if (t > 0.9) {
+            motionPulseRef.current = null;
+          } else if (motionPulseRef.current.kind === "lift") {
+            pulseY = Math.sin((t / 0.9) * Math.PI) * 1.15;
+          } else if (motionPulseRef.current.kind === "shake") {
+            pulseRz = Math.sin(t * 36) * 0.28 * (1 - t / 0.9);
+          } else if (motionPulseRef.current.kind === "tilt_left") {
+            pulseRz = Math.sin((t / 0.9) * Math.PI) * 0.55;
+          } else if (motionPulseRef.current.kind === "tilt_right") {
+            pulseRz = -Math.sin((t / 0.9) * Math.PI) * 0.55;
+          }
+        }
+
+        board.position.y += (pulseY - board.position.y) * 0.22;
+        board.rotation.x += (targetRotRef.current.rx - board.rotation.x) * 0.14;
+        board.rotation.z += (targetRotRef.current.rz + pulseRz - board.rotation.z) * 0.18;
+
+        for (const horn of servoHornsRef.current) {
+          horn.rotation.y += (targetServoRadRef.current - horn.rotation.y) * 0.16;
+        }
+
         controls.update();
         renderer.render(scene, camera);
       };
@@ -400,7 +563,6 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
       };
     }, []);
 
-    // 2. Highlight Selected Pin in 3D
     useEffect(() => {
       pinMeshesRef.current.forEach((mesh, pid) => {
         const mat = mesh.material as THREE.MeshStandardMaterial;
@@ -414,11 +576,12 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
       });
     }, [selectedPinId]);
 
-    // 3. Render Attached 3D Accessories + Curved Color-Coded Jumper Wires
     useEffect(() => {
       const group = attachmentsGroupRef.current;
       if (!group) return;
       group.clear();
+      servoHornsRef.current = [];
+      neopixelMatsRef.current = [];
 
       const accById = new Map(accessories.map((a) => [a.id, a]));
       const pinXById = new Map(pins.map((p) => [p.id, p.x_mm / 10]));
@@ -426,18 +589,17 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
       attachments.forEach((att, idx) => {
         const spec = accById.get(att.accessory_id);
         if (!spec) return;
-
-        // Arrange accessories cleanly in an arc below/beside the micro:bit
         const spread = Math.max(1, attachments.length - 1);
         const xPos = attachments.length === 1 ? 0 : -2.6 + (idx / spread) * 5.2;
         const yPos = -3.05;
         const zPos = 1.65 + (idx % 2) * 0.55;
 
-        const mod3d = makeAccessory3D(spec);
-        mod3d.position.set(xPos, yPos, zPos);
-        group.add(mod3d);
+        const built = makeAccessory3D(spec, simNeopixelHex);
+        built.group.position.set(xPos, yPos, zPos);
+        group.add(built.group);
+        if (built.servoHorn) servoHornsRef.current.push(built.servoHorn);
+        if (built.neopixelMats) neopixelMatsRef.current.push(...built.neopixelMats);
 
-        // Draw curved 3D jumper wires from each micro:bit edge pin to the accessory
         spec.wires.forEach((wire, wIdx) => {
           const targetPinId =
             wire.to_role === "signal"
@@ -458,7 +620,7 @@ export const Microbit3DCanvas = React.forwardRef<Microbit3DHandle, Microbit3DCan
           group.add(tube);
         });
       });
-    }, [attachments, accessories, pins]);
+    }, [attachments, accessories, pins]); // eslint-disable-line react-hooks/exhaustive-deps
 
     return <div ref={mountRef} className="h-full w-full" />;
   }

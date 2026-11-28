@@ -4,16 +4,21 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
+  Bot,
   Cable,
   CheckCircle2,
+  Code2,
   Cpu,
   Loader2,
   Play,
   Plus,
   RefreshCw,
   Save,
+  Send,
   Sparkles,
   Trash2,
+  Volume2,
+  VolumeX,
   Wand2,
   Zap,
 } from "lucide-react";
@@ -26,6 +31,7 @@ import {
   type Microbit3DHandle,
 } from "@/components/microbit/Microbit3DCanvas";
 import {
+  chatWithMicrobitCopilot,
   createMicrobitProject,
   deployMicrobitCode,
   generateMicrobitCode,
@@ -41,8 +47,85 @@ import {
   type MicrobitHardwareStatus,
   type MicrobitLiveSensors,
   type MicrobitProject,
+  type MicrobitTrigger,
 } from "@/lib/microbitApi";
 import { cn } from "@/lib/utils";
+
+function playBrowserSoundEffect(effect: string): void {
+  if (typeof window === "undefined" || !effect || effect === "none") return;
+  try {
+    const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    const now = ctx.currentTime;
+    gain.gain.setValueAtTime(0.18, now);
+
+    if (effect === "slide") {
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(340, now);
+      osc.frequency.exponentialRampToValueAtTime(1180, now + 0.32);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.36);
+      osc.start(now);
+      osc.stop(now + 0.38);
+    } else if (effect === "chime") {
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(523.25, now);
+      osc.frequency.setValueAtTime(659.25, now + 0.11);
+      osc.frequency.setValueAtTime(783.99, now + 0.22);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+      osc.start(now);
+      osc.stop(now + 0.46);
+    } else if (effect === "giggle") {
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(620, now);
+      osc.frequency.setValueAtTime(840, now + 0.08);
+      osc.frequency.setValueAtTime(660, now + 0.16);
+      osc.frequency.setValueAtTime(920, now + 0.24);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.38);
+      osc.start(now);
+      osc.stop(now + 0.4);
+    } else if (effect === "spring") {
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(220, now);
+      osc.frequency.linearRampToValueAtTime(740, now + 0.28);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.32);
+      osc.start(now);
+      osc.stop(now + 0.34);
+    } else if (effect === "sad") {
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(440, now);
+      osc.frequency.exponentialRampToValueAtTime(210, now + 0.35);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+      osc.start(now);
+      osc.stop(now + 0.42);
+    }
+  } catch {
+    // AudioContext blocked until user gesture
+  }
+}
+
+function speakBrowserText(text: string): void {
+  if (typeof window === "undefined" || !text.trim() || !("speechSynthesis" in window)) return;
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 1.05;
+    u.pitch = 1.25;
+    window.speechSynthesis.speak(u);
+  } catch {
+    // ignore speech synth errors
+  }
+}
+
+const QUICK_PROMPTS = [
+  "On lift say 'Weeee!' with a surprised face and slide sound",
+  "On left button play a chime and sweep the servo to 180 degrees",
+  "Attach NeoPixels on P1 and glow purple on right button",
+  "Add an external speaker on P0 and on touch logo say 'That tickles!'",
+];
 
 export function MicrobitLabStudio(): React.JSX.Element {
   const canvasRef = useRef<Microbit3DHandle | null>(null);
@@ -54,6 +137,20 @@ export function MicrobitLabStudio(): React.JSX.Element {
   const [selectedPinId, setSelectedPinId] = useState<string>("P0");
   const [codeDraft, setCodeDraft] = useState<string>("");
 
+  // Virtual 3D Twin Simulator live state
+  const [simLedIcon, setSimLedIcon] = useState<string>("HAPPY");
+  const [simServoAngle, setSimServoAngle] = useState<number>(90);
+  const [simNeopixelHex, setSimNeopixelHex] = useState<string>("#22d3ee");
+  const [simAudioOn, setSimAudioOn] = useState<boolean>(true);
+  const [simLastEvent, setSimLastEvent] = useState<string>(
+    "Click Button A, Button B, Gold Logo on the 3D board, or any trigger below!"
+  );
+
+  // Right panel mode: AI Co-Pilot Chat vs MicroPython Code
+  const [rightTab, setRightTab] = useState<"chat" | "code">("chat");
+  const [chatInput, setChatInput] = useState<string>("");
+  const [chatBusy, setChatBusy] = useState<boolean>(false);
+
   const [liveSensors, setLiveSensors] = useState<MicrobitLiveSensors | null>(null);
   const [liveTilt, setLiveTilt] = useState(false);
 
@@ -61,7 +158,7 @@ export function MicrobitLabStudio(): React.JSX.Element {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [consoleLog, setConsoleLog] = useState<string>(
-    "Ready. Attach accessories in 3D, generate MicroPython, and click Deploy & Run."
+    "Ready. Chat with the AI Co-Pilot, test in the 3D Twin, then Deploy & Run on your real micro:bit!"
   );
 
   const [newProjOpen, setNewProjOpen] = useState(false);
@@ -94,7 +191,6 @@ export function MicrobitLabStudio(): React.JSX.Element {
     void hydrate();
   }, [hydrate]);
 
-  // Optional live accelerometer polling for 3D Tilt Sync
   useEffect(() => {
     if (!liveTilt) return;
     let active = true;
@@ -114,11 +210,69 @@ export function MicrobitLabStudio(): React.JSX.Element {
     };
   }, [liveTilt]);
 
+  // Execute a trigger live in the 3D Digital Twin Canvas!
+  const handleVirtualTrigger = useCallback(
+    (trigger: MicrobitTrigger) => {
+      if (trigger === "lift" || trigger === "shake" || trigger === "tilt_left" || trigger === "tilt_right") {
+        canvasRef.current?.playMotionPulse(trigger);
+      }
+      const rule = (project?.sim_rules || []).find((r) => r.trigger === trigger);
+      if (!rule) {
+        setSimLastEvent(`Triggered '${trigger}' (no rule set yet — ask the AI Co-Pilot to add one!)`);
+        return;
+      }
+      if (rule.led_icon) setSimLedIcon(rule.led_icon);
+      if (typeof rule.servo_angle === "number") setSimServoAngle(rule.servo_angle);
+      if (rule.neopixel_hex) setSimNeopixelHex(rule.neopixel_hex);
+      if (simAudioOn) {
+        if (rule.sound_effect && rule.sound_effect !== "none") {
+          playBrowserSoundEffect(rule.sound_effect);
+        }
+        if (rule.speak_text) {
+          speakBrowserText(rule.speak_text);
+        }
+      }
+      const parts = [
+        `[${trigger.toUpperCase()}]`,
+        `LED: ${rule.led_icon}`,
+        rule.speak_text ? `Say: "${rule.speak_text}"` : null,
+        rule.sound_effect && rule.sound_effect !== "none" ? `Sound: ${rule.sound_effect}` : null,
+        typeof rule.servo_angle === "number" ? `Servo: ${rule.servo_angle}°` : null,
+        rule.neopixel_hex ? `NeoPixel: ${rule.neopixel_hex}` : null,
+      ].filter(Boolean);
+      setSimLastEvent(parts.join(" · "));
+    },
+    [project?.sim_rules, simAudioOn]
+  );
+
+  const handleSendChat = async (textOverride?: string) => {
+    const msg = (textOverride ?? chatInput).trim();
+    if (!msg || !project || chatBusy) return;
+    setChatInput("");
+    setChatBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await chatWithMicrobitCopilot(project.id, msg);
+      setProject(res.project);
+      setCodeDraft(res.project.code);
+      setNotice("AI Co-Pilot updated your 3D Twin, jumper wiring, simulator rules & MicroPython!");
+      // Auto-preview the newest rule in 3D if present
+      const latestRule = res.project.sim_rules?.[res.project.sim_rules.length - 1];
+      if (latestRule?.led_icon) setSimLedIcon(latestRule.led_icon);
+      if (typeof latestRule?.servo_angle === "number") setSimServoAngle(latestRule.servo_angle);
+      if (latestRule?.neopixel_hex) setSimNeopixelHex(latestRule.neopixel_hex);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "AI Co-Pilot chat failed.");
+    } finally {
+      setChatBusy(false);
+    }
+  };
+
   const handleAttachAccessory = async (acc: MicrobitAccessorySpec) => {
     if (!project) return;
     const used = new Set(project.wiring.used_pins);
-    const freePin =
-      acc.allowed_signal_pins.find((p) => !used.has(p)) || acc.default_pin;
+    const freePin = acc.allowed_signal_pins.find((p) => !used.has(p)) || acc.default_pin;
     const next: MicrobitAttachment[] = [
       ...project.attachments,
       {
@@ -181,7 +335,7 @@ export function MicrobitLabStudio(): React.JSX.Element {
       setConsoleLog(
         `[DEPLOY OK on ${res.host_name || "Pi 5"}]\n${res.upload || ""}\n${res.boot || ""}`.trim()
       );
-      setNotice("Deployed & running live on your BBC micro:bit v2.2!");
+      setNotice("Deployed & running live on your real BBC micro:bit v2.2!");
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Deploy failed.";
       setError(msg);
@@ -200,7 +354,7 @@ export function MicrobitLabStudio(): React.JSX.Element {
       setConsoleLog(
         `[SELF-TEST PASSED]\nAccel: (${res.sensors.ax}, ${res.sensors.ay}, ${res.sensors.az}) mg\nTemp: ${res.sensors.temp_c}°C (${Math.round((res.sensors.temp_c * 9) / 5 + 32)}°F)\nLight: ${res.sensors.light}/255 | Sound: ${res.sensors.sound}/255`
       );
-      setNotice("Hardware self-test passed! Check the micro:bit LED checkmark & live sensors.");
+      setNotice("Hardware self-test passed!");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Self-test failed.");
     } finally {
@@ -212,7 +366,7 @@ export function MicrobitLabStudio(): React.JSX.Element {
     return (
       <div className="flex h-96 items-center justify-center text-sm text-slate-300">
         <Loader2 className="mr-2 h-5 w-5 animate-spin text-cyan-400" />
-        Loading micro:bit v2.2 Prototyping Lab...
+        Loading micro:bit v2.2 AI Prototyping Lab...
       </div>
     );
   }
@@ -227,8 +381,10 @@ export function MicrobitLabStudio(): React.JSX.Element {
           <div className="flex flex-wrap items-center gap-2.5">
             <Cpu className="h-5 w-5 text-amber-400" />
             <div>
-              <h1 className="text-sm font-semibold text-white">BBC micro:bit v2.2 Project Lab</h1>
-              <p className="text-[11px] text-slate-400">{catalog.board.mcu}</p>
+              <h1 className="text-sm font-semibold text-white">BBC micro:bit v2.2 AI Co-Pilot &amp; 3D Lab</h1>
+              <p className="text-[11px] text-slate-400">
+                Chat → Simulate live in 3D Twin → Deploy to real micro:bit v2.2
+              </p>
             </div>
 
             <select
@@ -251,7 +407,7 @@ export function MicrobitLabStudio(): React.JSX.Element {
             </select>
 
             <Button size="sm" variant="outline" onClick={() => setNewProjOpen(true)} className="h-8 gap-1 text-xs cursor-pointer">
-              <Plus className="h-3.5 w-3.5" /> New Project
+              <Plus className="h-3.5 w-3.5" /> New
             </Button>
 
             <Badge variant={hwStatus?.connected ? "sky" : "neutral"} className="text-[10px]">
@@ -269,7 +425,7 @@ export function MicrobitLabStudio(): React.JSX.Element {
               className={cn("h-8 gap-1.5 text-xs cursor-pointer", liveTilt && "bg-cyan-600 text-white")}
             >
               <Activity className="h-3.5 w-3.5" />
-              {liveTilt ? "Live 3D Tilt: ON" : "Live 3D Tilt"}
+              {liveTilt ? "Live Tilt: ON" : "Live Tilt"}
             </Button>
 
             <Button
@@ -280,7 +436,7 @@ export function MicrobitLabStudio(): React.JSX.Element {
               className="h-8 gap-1.5 text-xs cursor-pointer"
             >
               <Zap className="h-3.5 w-3.5 text-amber-400" />
-              Hardware Self-Test
+              Self-Test
             </Button>
 
             <Button
@@ -290,7 +446,7 @@ export function MicrobitLabStudio(): React.JSX.Element {
               className="h-8 gap-1.5 bg-emerald-600 text-xs text-white hover:bg-emerald-500 cursor-pointer"
             >
               {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-              Deploy &amp; Run on micro:bit
+              Deploy to Real micro:bit
             </Button>
           </div>
         </CardContent>
@@ -312,58 +468,23 @@ export function MicrobitLabStudio(): React.JSX.Element {
         </div>
       )}
 
-      {/* 3-Column Interactive Hardware Prototyping Workbench */}
+      {/* 3-Column Workbench */}
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
-        {/* LEFT: Parts Library, Attached Parts & Step-by-Step Wiring Guide */}
+        {/* LEFT: Parts Library & Wiring Checklist */}
         <div className="space-y-4 xl:col-span-3">
           <Card className="border-white/10 bg-slate-950/90">
             <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-1.5 text-xs font-semibold text-cyan-300">
-                <Plus className="h-3.5 w-3.5" /> Attach Prototype Parts
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-1.5">
-              {catalog.accessories.map((acc) => (
-                <div
-                  key={acc.id}
-                  className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-slate-900/60 px-2.5 py-2"
-                >
-                  <div className="min-w-0">
-                    <div className="truncate text-xs font-medium text-slate-100">{acc.name}</div>
-                    <div className="truncate text-[10px] text-slate-400">{acc.summary}</div>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void handleAttachAccessory(acc)}
-                    className="h-7 shrink-0 px-2 text-[10px] cursor-pointer"
-                  >
-                    + Attach
-                  </Button>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-
-          <Card className="border-white/10 bg-slate-950/90">
-            <CardHeader className="pb-2">
               <CardTitle className="flex items-center gap-1.5 text-xs font-semibold text-amber-300">
-                <Cable className="h-3.5 w-3.5" /> Physical Wiring Guide ({project.attachments.length} Parts)
+                <Cable className="h-3.5 w-3.5" /> Attached Parts &amp; Wiring ({project.attachments.length})
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2.5">
+            <CardContent className="space-y-2">
               {project.wiring.conflicts.map((c, idx) => (
                 <div key={`conf_${idx}`} className="flex items-start gap-1.5 rounded-md border border-red-500/40 bg-red-950/50 p-2 text-[11px] text-red-200">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
                   <span>{c}</span>
                 </div>
               ))}
-              {project.wiring.warnings.map((w, idx) => (
-                <div key={`warn_${idx}`} className="rounded-md border border-amber-500/40 bg-amber-950/40 p-2 text-[11px] text-amber-200">
-                  {w}
-                </div>
-              ))}
-
               {project.attachments.map((att) => {
                 const spec = catalog.accessories.find((a) => a.id === att.accessory_id);
                 return (
@@ -394,12 +515,12 @@ export function MicrobitLabStudio(): React.JSX.Element {
               })}
 
               {project.wiring.wiring_steps.length > 0 && (
-                <div className="max-h-48 space-y-1 overflow-y-auto border-t border-white/10 pt-2">
+                <div className="max-h-36 space-y-1 overflow-y-auto border-t border-white/10 pt-2">
                   {project.wiring.wiring_steps.map((s) => (
-                    <div key={`ws_${s.step}`} className="flex items-center gap-2 text-[11px] text-slate-300">
+                    <div key={`ws_${s.step}`} className="flex items-center gap-2 text-[10px] text-slate-300">
                       <span
                         style={{ backgroundColor: s.color }}
-                        className="h-2.5 w-2.5 shrink-0 rounded-full border border-white/30"
+                        className="h-2 w-2 shrink-0 rounded-full border border-white/30"
                       />
                       <span>{s.instruction}</span>
                     </div>
@@ -408,23 +529,66 @@ export function MicrobitLabStudio(): React.JSX.Element {
               )}
             </CardContent>
           </Card>
+
+          <Card className="border-white/10 bg-slate-950/90">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-1.5 text-xs font-semibold text-cyan-300">
+                <Plus className="h-3.5 w-3.5" /> Parts Library
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-1.5">
+              {catalog.accessories.map((acc) => (
+                <div
+                  key={acc.id}
+                  className="flex items-center justify-between gap-2 rounded-lg border border-white/10 bg-slate-900/60 px-2.5 py-1.5"
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-[11px] font-medium text-slate-100">{acc.name}</div>
+                    <div className="truncate text-[10px] text-slate-400">{acc.summary}</div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void handleAttachAccessory(acc)}
+                    className="h-6 shrink-0 px-2 text-[10px] cursor-pointer"
+                  >
+                    + Add
+                  </Button>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
         </div>
 
-        {/* CENTER: Interactive Three.js 3D micro:bit v2.2 + Pinout Schematic Inspector */}
+        {/* CENTER: Interactive 3D Virtual Twin Simulator + Trigger Test Bar + Pinout */}
         <div className="space-y-4 xl:col-span-5">
           <Card className="overflow-hidden border-white/10 bg-slate-950/90">
-            <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3.5 py-2.5">
-              <CardTitle className="text-xs font-semibold text-white">
-                3D Digital Twin &amp; Interactive Jumper Wiring
-              </CardTitle>
+            <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b border-white/10 px-3.5 py-2">
+              <div className="flex items-center gap-2">
+                <CardTitle className="text-xs font-semibold text-white">
+                  Live Interactive 3D Twin Simulator
+                </CardTitle>
+                <Badge variant="sky" className="text-[9px]">
+                  Click 3D Buttons / Logo / Pins
+                </Badge>
+              </div>
               <div className="flex items-center gap-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setSimAudioOn((v) => !v)}
+                  title={simAudioOn ? "Mute virtual speaker" : "Unmute virtual speaker"}
+                  className="h-6 px-2 text-cyan-300 cursor-pointer"
+                >
+                  {simAudioOn ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5 text-slate-500" />}
+                </Button>
                 {(["front", "back", "iso", "top"] as const).map((v) => (
                   <Button
                     key={v}
                     size="sm"
                     variant="ghost"
                     onClick={() => canvasRef.current?.setView(v)}
-                    className="h-6 px-2 text-[10px] uppercase text-slate-300 hover:text-white cursor-pointer"
+                    className="h-6 px-1.5 text-[10px] uppercase text-slate-300 hover:text-white cursor-pointer"
                   >
                     {v}
                   </Button>
@@ -432,7 +596,7 @@ export function MicrobitLabStudio(): React.JSX.Element {
               </div>
             </CardHeader>
             <CardContent className="p-0">
-              <div className="h-[430px] w-full bg-[#050914]">
+              <div className="h-[390px] w-full bg-[#050914]">
                 <Microbit3DCanvas
                   ref={canvasRef}
                   pins={catalog.pins}
@@ -441,18 +605,62 @@ export function MicrobitLabStudio(): React.JSX.Element {
                   selectedPinId={selectedPinId}
                   liveSensors={liveSensors}
                   liveTiltEnabled={liveTilt}
+                  ledIcon={simLedIcon}
+                  simServoAngle={simServoAngle}
+                  simNeopixelHex={simNeopixelHex}
                   onSelectPin={(pid) => setSelectedPinId(pid)}
+                  onVirtualTrigger={handleVirtualTrigger}
                 />
+              </div>
+
+              {/* Virtual Event Simulator Test Bar */}
+              <div className="space-y-2 border-t border-white/10 bg-slate-900/70 p-3">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                    Test in 3D:
+                  </span>
+                  {(
+                    [
+                      { id: "button_a", label: "Btn A (Left)" },
+                      { id: "button_b", label: "Btn B (Right)" },
+                      { id: "logo_touch", label: "Touch Logo" },
+                      { id: "lift", label: "Lift Up" },
+                      { id: "tilt_left", label: "Tilt Left" },
+                      { id: "tilt_right", label: "Tilt Right" },
+                      { id: "shake", label: "Shake" },
+                      { id: "pir_motion", label: "Motion" },
+                    ] as Array<{ id: MicrobitTrigger; label: string }>
+                  ).map((t) => {
+                    const hasRule = (project.sim_rules || []).some((r) => r.trigger === t.id);
+                    return (
+                      <Button
+                        key={t.id}
+                        size="sm"
+                        variant={hasRule ? "default" : "outline"}
+                        onClick={() => handleVirtualTrigger(t.id)}
+                        className={cn(
+                          "h-6 px-2 text-[10px] cursor-pointer",
+                          hasRule && "bg-cyan-600/80 text-white hover:bg-cyan-500"
+                        )}
+                      >
+                        {t.label}
+                      </Button>
+                    );
+                  })}
+                </div>
+                <div className="rounded-md border border-cyan-500/25 bg-slate-950/80 px-2.5 py-1.5 font-mono text-[11px] text-cyan-200">
+                  {simLastEvent}
+                </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* Interactive Pin Schematic Card */}
+          {/* Pinout Schematic Inspector */}
           <Card className="border-white/10 bg-slate-950/90">
             <CardHeader className="pb-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <CardTitle className="text-xs font-semibold text-amber-300">
-                  Pinout Schematic Inspector — {selectedPin.label}
+                  Pin Schematic — {selectedPin.label}
                 </CardTitle>
                 <div className="flex flex-wrap gap-1">
                   {catalog.pins.map((p) => (
@@ -473,7 +681,7 @@ export function MicrobitLabStudio(): React.JSX.Element {
                 </div>
               </div>
             </CardHeader>
-            <CardContent className="space-y-2 text-xs">
+            <CardContent className="space-y-1.5 text-xs">
               <div className="flex flex-wrap gap-1.5">
                 <Badge variant="sky" className="font-mono text-[10px]">
                   {selectedPin.voltage} · Max {selectedPin.max_ma}mA
@@ -487,108 +695,159 @@ export function MicrobitLabStudio(): React.JSX.Element {
               <p className="text-[11px] text-slate-300">{selectedPin.notes}</p>
             </CardContent>
           </Card>
-
-          {/* Live Sensor Telemetry Bar */}
-          {liveSensors && (
-            <Card className="border-cyan-500/30 bg-slate-950/90">
-              <CardContent className="grid grid-cols-4 gap-2 p-3 font-mono text-[11px]">
-                <div>
-                  <div className="text-[10px] text-slate-400">Accel X/Y/Z</div>
-                  <div className="text-cyan-300">
-                    {liveSensors.ax}, {liveSensors.ay}, {liveSensors.az}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[10px] text-slate-400">Temp</div>
-                  <div className="text-emerald-300">
-                    {liveSensors.temp_c}°C ({Math.round((liveSensors.temp_c * 9) / 5 + 32)}°F)
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[10px] text-slate-400">Light / Sound</div>
-                  <div className="text-amber-300">
-                    {liveSensors.light} / {liveSensors.sound}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[10px] text-slate-400">Inputs</div>
-                  <div className="text-slate-200">
-                    A:{liveSensors.btn_a ? "1" : "0"} B:{liveSensors.btn_b ? "1" : "0"} L:{liveSensors.logo ? "1" : "0"}
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
         </div>
 
-        {/* RIGHT: MicroPython Code Studio, Templates & Live Console */}
-        <div className="space-y-4 xl:col-span-4">
-          <Card className="border-white/10 bg-slate-950/90">
-            <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-2">
-              <CardTitle className="text-xs font-semibold text-emerald-300">
-                MicroPython Prototype Code (`main.py`)
-              </CardTitle>
-              <div className="flex items-center gap-1.5">
+        {/* RIGHT: Built-In AI Hardware Co-Pilot Chat | MicroPython Code Studio */}
+        <div className="xl:col-span-4">
+          <Card className="flex h-full min-h-[600px] flex-col border-white/10 bg-slate-950/90">
+            <CardHeader className="flex flex-row items-center justify-between border-b border-white/10 px-3.5 py-2.5">
+              <div className="flex gap-1.5">
                 <Button
                   size="sm"
-                  variant="outline"
-                  onClick={() => void handleGenerateCode()}
-                  className="h-7 gap-1 border-cyan-500/40 text-[11px] text-cyan-200 cursor-pointer"
+                  variant={rightTab === "chat" ? "default" : "ghost"}
+                  onClick={() => setRightTab("chat")}
+                  className={cn("h-7 gap-1.5 text-xs cursor-pointer", rightTab === "chat" && "bg-cyan-600 text-white")}
                 >
-                  <Wand2 className="h-3 w-3" /> Auto-Generate from Parts
+                  <Bot className="h-3.5 w-3.5" /> AI Co-Pilot Chat
                 </Button>
                 <Button
                   size="sm"
-                  variant="ghost"
-                  onClick={async () => {
-                    const res = await updateMicrobitProject(project.id, { code: codeDraft });
-                    setProject(res.project);
-                    setNotice("Saved project code to PostgreSQL 18.");
-                  }}
-                  className="h-7 gap-1 text-[11px] cursor-pointer"
+                  variant={rightTab === "code" ? "default" : "ghost"}
+                  onClick={() => setRightTab("code")}
+                  className={cn("h-7 gap-1.5 text-xs cursor-pointer", rightTab === "code" && "bg-cyan-600 text-white")}
                 >
-                  <Save className="h-3 w-3" /> Save
+                  <Code2 className="h-3.5 w-3.5" /> MicroPython (`main.py`)
                 </Button>
               </div>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void hydrate(project.id)}
+                className="h-7 px-2 text-slate-400 hover:text-white cursor-pointer"
+                title="Refresh USB status"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </Button>
             </CardHeader>
-            <CardContent className="space-y-2.5">
-              <div className="flex flex-wrap gap-1.5">
-                {catalog.templates.map((tpl) => (
-                  <button
-                    key={tpl.id}
-                    type="button"
-                    onClick={() => setCodeDraft(tpl.code)}
-                    className="rounded-md border border-white/10 bg-slate-900 px-2 py-1 text-[10px] text-slate-300 hover:border-cyan-400/50 hover:text-white cursor-pointer"
-                  >
-                    Load: {tpl.name}
-                  </button>
-                ))}
-              </div>
 
-              <textarea
-                value={codeDraft}
-                onChange={(e) => setCodeDraft(e.target.value)}
-                spellCheck={false}
-                rows={18}
-                className="w-full rounded-xl border border-white/15 bg-slate-900 p-3 font-mono text-[11px] leading-relaxed text-emerald-200 focus:border-cyan-400 focus:outline-none"
-              />
-
-              <div className="rounded-xl border border-white/10 bg-black/80 p-2.5">
-                <div className="mb-1 flex items-center justify-between text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                  <span>Hardware Console (/dev/ttyACM0)</span>
-                  <button
-                    type="button"
-                    onClick={() => void hydrate(project.id)}
-                    className="inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300 cursor-pointer"
-                  >
-                    <RefreshCw className="h-2.5 w-2.5" /> Refresh USB
-                  </button>
+            {rightTab === "chat" ? (
+              <CardContent className="flex flex-1 flex-col justify-between gap-3 p-3">
+                {/* Chat History */}
+                <div className="flex-1 space-y-2.5 overflow-y-auto pr-1">
+                  {(project.chat_history || []).length === 0 ? (
+                    <div className="space-y-2.5 rounded-xl border border-cyan-500/20 bg-cyan-950/15 p-3 text-xs text-slate-300">
+                      <div className="font-semibold text-cyan-300">
+                        Tell me what you want your micro:bit to do!
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        I will attach 3D parts, wire the jumper cables, program the virtual 3D twin so you can test it immediately, and keep the real MicroPython ready to flash.
+                      </p>
+                      <div className="space-y-1.5 pt-1">
+                        {QUICK_PROMPTS.map((qp) => (
+                          <button
+                            key={qp}
+                            type="button"
+                            onClick={() => void handleSendChat(qp)}
+                            className="block w-full rounded-lg border border-white/10 bg-slate-900/80 px-2.5 py-1.5 text-left text-[11px] text-slate-200 hover:border-cyan-400/50 hover:text-cyan-200 cursor-pointer"
+                          >
+                            &ldquo;{qp}&rdquo;
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    (project.chat_history || []).map((m, idx) => (
+                      <div
+                        key={`msg_${idx}`}
+                        className={cn(
+                          "rounded-xl px-3 py-2 text-xs leading-relaxed",
+                          m.role === "user"
+                            ? "ml-6 border border-cyan-500/30 bg-cyan-950/50 text-cyan-100"
+                            : "mr-4 border border-white/10 bg-slate-900/90 text-slate-200"
+                        )}
+                      >
+                        <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                          {m.role === "user" ? "You" : "micro:bit AI Co-Pilot"}
+                        </div>
+                        {m.text}
+                      </div>
+                    ))
+                  )}
+                  {chatBusy && (
+                    <div className="flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-slate-900 px-3 py-2 text-xs text-cyan-300">
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      Wiring 3D twin &amp; writing MicroPython...
+                    </div>
+                  )}
                 </div>
-                <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap font-mono text-[10px] text-slate-300">
-                  {consoleLog}
-                </pre>
-              </div>
-            </CardContent>
+
+                {/* Chat Composer */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    void handleSendChat();
+                  }}
+                  className="flex gap-2 border-t border-white/10 pt-2.5"
+                >
+                  <Input
+                    value={chatInput}
+                    onChange={(e) => setChatInput(e.target.value)}
+                    placeholder="e.g. On lift say 'Weeee!', on left button play a chime..."
+                    className="h-9 bg-slate-900 text-xs"
+                  />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={chatBusy || !chatInput.trim()}
+                    className="h-9 bg-cyan-600 px-3 text-white hover:bg-cyan-500 cursor-pointer"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                  </Button>
+                </form>
+              </CardContent>
+            ) : (
+              <CardContent className="flex flex-1 flex-col gap-2.5 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void handleGenerateCode()}
+                    className="h-7 gap-1 border-cyan-500/40 text-[11px] text-cyan-200 cursor-pointer"
+                  >
+                    <Wand2 className="h-3 w-3" /> Generate from Parts
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={async () => {
+                      const res = await updateMicrobitProject(project.id, { code: codeDraft });
+                      setProject(res.project);
+                      setNotice("Saved MicroPython code.");
+                    }}
+                    className="h-7 gap-1 text-[11px] cursor-pointer"
+                  >
+                    <Save className="h-3 w-3" /> Save
+                  </Button>
+                </div>
+
+                <textarea
+                  value={codeDraft}
+                  onChange={(e) => setCodeDraft(e.target.value)}
+                  spellCheck={false}
+                  rows={16}
+                  className="flex-1 rounded-xl border border-white/15 bg-slate-900 p-3 font-mono text-[11px] leading-relaxed text-emerald-200 focus:border-cyan-400 focus:outline-none"
+                />
+
+                <div className="rounded-xl border border-white/10 bg-black/80 p-2.5">
+                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                    Hardware Console (/dev/ttyACM0)
+                  </div>
+                  <pre className="max-h-24 overflow-y-auto whitespace-pre-wrap font-mono text-[10px] text-slate-300">
+                    {consoleLog}
+                  </pre>
+                </div>
+              </CardContent>
+            )}
           </Card>
         </div>
       </div>

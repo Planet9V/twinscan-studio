@@ -58,12 +58,19 @@ class AttachmentItem(BaseModel):
 
 
 class UpdateMicrobitProjectRequest(BaseModel):
-    """Update a micro:bit project's metadata, attached accessories, or MicroPython code."""
+    """Update a micro:bit project's metadata, attached accessories, sim_rules, or MicroPython code."""
 
     name: Optional[str] = Field(default=None, min_length=1, max_length=96)
     description: Optional[str] = Field(default=None, max_length=240)
     attachments: Optional[List[AttachmentItem]] = Field(default=None)
+    sim_rules: Optional[List[Dict[str, Any]]] = Field(default=None)
     code: Optional[str] = Field(default=None, max_length=20000)
+
+
+class CopilotChatRequest(BaseModel):
+    """Natural-language instruction for the micro:bit AI Hardware & Code Co-Pilot."""
+
+    message: str = Field(..., min_length=1, max_length=1500)
 
 
 class DeployCodeRequest(BaseModel):
@@ -137,8 +144,53 @@ async def update_microbit_project(
         proj["attachments"] = cleaned
     if payload.code is not None:
         proj["code"] = payload.code
+    if payload.sim_rules is not None:
+        proj["sim_rules"] = payload.sim_rules
     saved = store.save_project(proj)
     return {"ok": True, "project": saved}
+
+
+@router.post("/projects/{project_id}/chat")
+async def chat_with_microbit_copilot(
+    request: Request,
+    project_id: str,
+    payload: CopilotChatRequest,
+) -> Dict[str, Any]:
+    """Chat with the AI Hardware Co-Pilot to wire 3D parts, update simulator rules, and write MicroPython."""
+    from src.microbit.ai_copilot import run_microbit_copilot_turn
+
+    store = _get_store(request)
+    proj = store.get_project(project_id)
+    if proj is None:
+        raise HTTPException(status_code=404, detail="micro:bit project not found.")
+
+    runtime = getattr(request.app.state, "runtime", None)
+    repo = getattr(request.app.state, "twin_repo", None) or getattr(runtime, "repo", None)
+    raw_settings = (repo.get_settings_raw() if (repo is not None and hasattr(repo, "get_settings_raw")) else {}) or {}
+    or_key = str(raw_settings.get("openrouter_api_key") or "").strip() or None
+    or_model = str(raw_settings.get("openrouter_model") or "google/gemini-2.5-flash").strip()
+
+    res = await run_microbit_copilot_turn(
+        project=proj,
+        user_message=payload.message,
+        openrouter_api_key=or_key,
+        openrouter_model=or_model,
+    )
+    proj["attachments"] = res["attachments"]
+    proj["sim_rules"] = res["sim_rules"]
+    proj["code"] = res["code"]
+    history = list(proj.get("chat_history") or [])
+    history.append({"role": "user", "text": payload.message})
+    history.append({"role": "assistant", "text": res["assistant_reply"]})
+    proj["chat_history"] = history[-30:]
+
+    saved = store.save_project(proj)
+    return {
+        "ok": True,
+        "assistant_reply": res["assistant_reply"],
+        "provider": res.get("provider"),
+        "project": saved,
+    }
 
 
 @router.delete("/projects/{project_id}")

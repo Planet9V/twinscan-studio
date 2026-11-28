@@ -56,11 +56,37 @@ export interface MicrobitWiringValidation {
   wiring_steps: MicrobitWiringStep[];
 }
 
+export type MicrobitTrigger =
+  | "lift"
+  | "tilt_left"
+  | "tilt_right"
+  | "shake"
+  | "button_a"
+  | "button_b"
+  | "logo_touch"
+  | "pir_motion";
+
+export interface MicrobitSimRule {
+  trigger: MicrobitTrigger;
+  led_icon: string;
+  speak_text: string;
+  sound_effect: string;
+  servo_angle: number | null;
+  neopixel_hex: string | null;
+}
+
+export interface MicrobitChatMessage {
+  role: "user" | "assistant";
+  text: string;
+}
+
 export interface MicrobitProject {
   id: string;
   name: string;
   description: string;
   attachments: MicrobitAttachment[];
+  sim_rules?: MicrobitSimRule[];
+  chat_history?: MicrobitChatMessage[];
   code: string;
   wiring: MicrobitWiringValidation;
   created_at: number;
@@ -185,4 +211,15 @@ export async function readMicrobitSensors(): Promise<{ ok: boolean; sensors: Mic
 
 export async function runMicrobitSelfTest(): Promise<{ ok: boolean; sensors: MicrobitLiveSensors }> {
   return mbReq("/api/microbit/hardware/self-test", { method: "POST" });
+}
+
+export async function chatWithMicrobitCopilot(
+  projectId: string,
+  message: string
+): Promise<{ ok: boolean; assistant_reply: string; provider?: string; project: MicrobitProject }> {
+  return mbReq(`/api/microbit/projects/${encodeURIComponent(projectId)}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
 }

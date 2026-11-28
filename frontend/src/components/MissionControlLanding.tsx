@@ -8,12 +8,17 @@ import {
   ArrowRight,
   Battery,
   Bot,
+  Box,
   Cable,
+  Camera,
   CheckCircle2,
+  CircuitBoard,
   Compass,
   Cpu,
   Gamepad2,
+  HardDriveDownload,
   Layers,
+  Map,
   Mic,
   Network,
   Radar,
@@ -26,6 +31,7 @@ import {
   Thermometer,
   Wifi,
   WifiOff,
+  Wrench,
   Zap,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -127,6 +133,53 @@ export function MissionControlLanding() {
   const roomArea = Number(frame?.metrics?.area_m2 ?? space?.metrics?.area_m2 ?? 0) || 0;
   const wallCount = frame?.walls?.length ?? space?.walls?.length ?? 0;
 
+  const featuredStudios = [
+    {
+      href: "/microbit",
+      badge: "NEW · 3D LAB",
+      badgeVariant: "default" as const,
+      title: "Universal 3D Hardware Lab & AI Co-Pilot",
+      desc: "Prototype BBC micro:bit v2.2, Raspberry Pi 5 16GB & PuppyPi Pro in interactive 3D with drag-and-drop Hiwonder sensors, Web Speech/Audio sim & live USB flashing.",
+      highlights: ["3 Switchable 3D Boards", "Hiwonder Sensor Kit", "AI Co-Pilot Chat"],
+      cta: "Open 3D Hardware Lab",
+      icon: CircuitBoard,
+      accent: "text-eigenia-orange",
+    },
+    {
+      href: "/room-studio",
+      badge: "NEW · PHOTO → 3D",
+      badgeVariant: "sky" as const,
+      title: "Compositional Room Twin Studio",
+      desc: "Build high-fidelity PBR .glb & 3DGS room digital twins from photos with OpenRouter Vision scene-graph boxing, TransformControls & Ghost Camera NBV Coach.",
+      highlights: ["Photo-to-GLB", "Vision Scene Graph", "3DGS / GLB Export"],
+      cta: "Launch Room Studio",
+      icon: Box,
+      accent: "text-eigenia-sky",
+    },
+    {
+      href: "/slam",
+      badge: "NEW · ROS 2 SLAM",
+      badgeVariant: "amber" as const,
+      title: "SLAM Mapping Studio",
+      desc: "Run live ROS 2 Humble Occupancy-Grid SLAM on PuppyPi Pro's LD19 360° LiDAR, track mapped m² coverage in real time, and export 3D extruded wall twins in 1 click.",
+      highlights: ["LD19 360° LiDAR", "Live Occupancy Grid", "1-Click 3D Export"],
+      cta: "Open SLAM Studio",
+      icon: Map,
+      accent: "text-eigenia-amber",
+    },
+    {
+      href: "/overwatch",
+      badge: "UPGRADED · STAGE",
+      badgeVariant: "sky" as const,
+      title: "Overwatch Multi-Camera Stage",
+      desc: "Spotlight Main+Mini camera stage with Raspberry Pi 5 4K auto-discovery, Shapely GDOP frustum fusion, ROI upscale loupe & Guided Self-Calibration Wizard.",
+      highlights: ["Pi 5 4K Auto-Sync", "GDOP Fusion", "Self-Cal Wizard"],
+      cta: "Open Overwatch",
+      icon: Camera,
+      accent: "text-eigenia-sky",
+    },
+  ];
+
   const quickModules = [
     {
       href: "/twin",
@@ -167,6 +220,22 @@ export function MissionControlLanding() {
       metric: "Multi-waypoint · VFH Safety",
       icon: Route,
       accent: "text-eigenia-amber",
+    },
+    {
+      href: "/architect",
+      title: "Lab Architect Co-Design",
+      desc: "Auto Fleet & USB Peripheral Sync, 2D wiring schematics & 3D hardware assembly",
+      metric: "6 Hardware Profiles · Auto-Sync",
+      icon: Wrench,
+      accent: "text-eigenia-orange",
+    },
+    {
+      href: "/flash",
+      title: "Universal Device Flasher",
+      desc: "Flash Raspberry Pi OS, ROS 2, MicroPython, ESP32/ESPHome & micro:bit via USB/SSH",
+      metric: "Multi-Platform · Zero CLI",
+      icon: HardDriveDownload,
+      accent: "text-eigenia-sky",
     },
     {
       href: "/catalog",
@@ -211,6 +280,7 @@ export function MissionControlLanding() {
           <div className="space-y-1.5">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="default">MISSION CONTROL</Badge>
+              <Badge variant="sky">v2.1.0</Badge>
               <Badge variant={isRos2 ? "default" : "sky"}>
                 <Zap className="h-3 w-3" />
                 {isRos2 ? "ROS 2 HUMBLE DDS" : "ROS 1 NOETIC"}
@@ -228,8 +298,8 @@ export function MissionControlLanding() {
               <span className="font-mono text-white">
                 {space ? `${space.facility} · ${space.name}` : "Initializing..."}
               </span>{" "}
-              — Orchestrate LAN PuppyPi quadruped discovery, dual ROS 1 Noetic / ROS 2 Humble FPV control,
-              SSH HBOM/SBOM cataloguing, and LiDAR Dark-Zone spatial digital twin verification.
+              — Orchestrate LAN PuppyPi quadruped discovery, ROS 2 Humble SLAM & Photo-to-3D Room Twins,
+              Overwatch Multi-Camera fusion, and Universal 3D Hardware Prototyping for micro:bit v2.2 &amp; Pi 5.
             </p>
           </div>
 
@@ -246,6 +316,12 @@ export function MissionControlLanding() {
                 <Search className="h-4 w-4" />
               )}
               {discovering ? "Scanning LAN (UDP 9027 / TCP 9090)..." : "Auto-Discover PuppyPi & LAN Fleet"}
+            </Button>
+            <Button size="lg" variant="secondary" asChild className="font-mono text-xs">
+              <Link href="/microbit">
+                <CircuitBoard className="h-4 w-4 text-eigenia-orange" />
+                3D Hardware Lab
+              </Link>
             </Button>
             <Button
               size="lg"
@@ -488,32 +564,94 @@ export function MissionControlLanding() {
         </Card>
       </section>
 
-      {/* Quick-Launch Navigation Tiles (8 Operational Modules) */}
-      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {quickModules.map((mod) => {
-          const Icon = mod.icon;
-          return (
-            <Link key={mod.href} href={mod.href} className="group">
-              <Card className="h-full transition-colors hover:border-eigenia-orange/50 hover:bg-eigenia-shell">
-                <CardContent className="flex h-full flex-col justify-between gap-3 p-4">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex h-8 w-8 items-center justify-center rounded border border-white/10 bg-eigenia-obsidian">
-                        <Icon className={`h-4 w-4 ${mod.accent}`} />
+      {/* v2.1 Featured Studios Spotlight */}
+      <section className="space-y-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-eigenia-orange" />
+            <h2 className="font-mono text-xs font-bold uppercase tracking-wider text-white">
+              What&apos;s New in v2.1 — Featured Studios
+            </h2>
+            <Badge variant="default">4 NEW &amp; UPGRADED WORKSPACES</Badge>
+          </div>
+          <span className="font-mono text-[11px] text-eigenia-muted">
+            3D Hardware Prototyping · Photo-to-3D Room Twins · Live ROS 2 SLAM · Multi-Camera Overwatch
+          </span>
+        </div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {featuredStudios.map((studio) => {
+            const Icon = studio.icon;
+            return (
+              <Link key={studio.href} href={studio.href} className="group">
+                <Card className="h-full border-eigenia-orange/25 bg-eigenia-shell/90 transition-colors hover:border-eigenia-orange/60 hover:bg-eigenia-shell">
+                  <CardContent className="flex h-full flex-col justify-between gap-3 p-4">
+                    <div className="space-y-2.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-md border border-white/10 bg-eigenia-obsidian">
+                          <Icon className={`h-4 w-4 ${studio.accent}`} />
+                        </div>
+                        <Badge variant={studio.badgeVariant}>{studio.badge}</Badge>
                       </div>
-                      <ArrowRight className="h-3.5 w-3.5 text-eigenia-muted transition-transform group-hover:translate-x-0.5 group-hover:text-eigenia-orange" />
+                      <div className="text-sm font-semibold text-white">{studio.title}</div>
+                      <p className="text-[11px] leading-relaxed text-eigenia-muted">{studio.desc}</p>
                     </div>
-                    <div className="text-xs font-semibold text-white">{mod.title}</div>
-                    <p className="text-[11px] leading-relaxed text-eigenia-muted">{mod.desc}</p>
-                  </div>
-                  <div className="border-t border-white/10 pt-2 font-mono text-[10px] text-eigenia-sky">
-                    {mod.metric}
-                  </div>
-                </CardContent>
-              </Card>
-            </Link>
-          );
-        })}
+                    <div className="space-y-2.5 border-t border-white/10 pt-2.5">
+                      <div className="flex flex-wrap gap-1">
+                        {studio.highlights.map((tag) => (
+                          <Badge key={tag} variant="neutral">
+                            {tag}
+                          </Badge>
+                        ))}
+                      </div>
+                      <div className="flex items-center justify-between font-mono text-[11px] font-semibold text-eigenia-orange">
+                        <span>{studio.cta}</span>
+                        <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-1" />
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Quick-Launch Navigation Tiles (10 Operational Modules) */}
+      <section className="space-y-2.5">
+        <div className="flex items-center justify-between">
+          <h2 className="font-mono text-xs font-bold uppercase tracking-wider text-eigenia-muted">
+            Core Fleet &amp; Spatial Operations
+          </h2>
+          <span className="font-mono text-[10px] text-eigenia-muted">
+            {quickModules.length + featuredStudios.length} Studio Modules Ready
+          </span>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          {quickModules.map((mod) => {
+            const Icon = mod.icon;
+            return (
+              <Link key={mod.href} href={mod.href} className="group">
+                <Card className="h-full transition-colors hover:border-eigenia-orange/50 hover:bg-eigenia-shell">
+                  <CardContent className="flex h-full flex-col justify-between gap-3 p-4">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex h-8 w-8 items-center justify-center rounded border border-white/10 bg-eigenia-obsidian">
+                          <Icon className={`h-4 w-4 ${mod.accent}`} />
+                        </div>
+                        <ArrowRight className="h-3.5 w-3.5 text-eigenia-muted transition-transform group-hover:translate-x-0.5 group-hover:text-eigenia-orange" />
+                      </div>
+                      <div className="text-xs font-semibold text-white">{mod.title}</div>
+                      <p className="text-[11px] leading-relaxed text-eigenia-muted">{mod.desc}</p>
+                    </div>
+                    <div className="border-t border-white/10 pt-2 font-mono text-[10px] text-eigenia-sky">
+                      {mod.metric}
+                    </div>
+                  </CardContent>
+                </Card>
+              </Link>
+            );
+          })}
+        </div>
       </section>
 
       {/* Bottom Split: Live Discovered Robot Fleet & Top-5 Priority Dark-Zone Alerts */}

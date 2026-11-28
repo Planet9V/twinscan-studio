@@ -4,13 +4,14 @@
 
 **One local Docker workspace to drive real robots, scan rooms into exportable 3D models, and prototype Raspberry Pi hardware without cloud lock-in.**
 
+[![Version 2.1.0](https://img.shields.io/badge/version-2.1.0-E05A10?style=flat-square)](CHANGELOG.md)
 [![Python 3.13](https://img.shields.io/badge/Python-3.13-3776AB?style=flat-square&logo=python&logoColor=white)](requirements.txt)
 [![Next.js 16](https://img.shields.io/badge/Next.js-16.4-000000?style=flat-square&logo=nextdotjs&logoColor=white)](frontend/package.json)
 [![ROS 2 Humble](https://img.shields.io/badge/ROS%202-Humble%20%2B%20Noetic-E05A10?style=flat-square&logo=ros&logoColor=white)](src/robot/ros_profiles.py)
 [![Three.js & Babylon.js](https://img.shields.io/badge/3D%20Engines-Three.js%20%2B%20Babylon.js-38BDF8?style=flat-square)](frontend/src/components/twin3d)
 [![PostgreSQL 18 + pgvector](https://img.shields.io/badge/PostgreSQL-18%20%2B%20pgvector-336791?style=flat-square&logo=postgresql&logoColor=white)](docker-compose.yml)
 [![Neo4j 5](https://img.shields.io/badge/Neo4j-5%20Graph-008CC1?style=flat-square&logo=neo4j&logoColor=white)](src/graph/neo4j_store.py)
-[![Tests](https://img.shields.io/badge/pytest-199%20passing-10B981?style=flat-square)](tests)
+[![Tests](https://img.shields.io/badge/pytest-220%20passing-10B981?style=flat-square)](tests)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)](LICENSE)
 
 [Quick Start](#quick-start-3-commands) · [Live Screenshots](#inside-the-studio) · [Flagship PuppyPi Pro Example](#flagship-example-hiwonder-puppypi-pro) · [Architecture](#system-architecture) · [Full Wiki (`docs/wiki/`)](docs/wiki/README.md) · [Early Bird Founders](#early-bird-maker-founders-50-spots)
@@ -44,7 +45,17 @@ Every capability below was built and tested against a real **Hiwonder PuppyPi Pr
 | **Live LD19 LiDAR Rate** | `5.0–6.9 Hz`, single-instance deduplicated (`0` timeouts) | `src/robot/ssh_manager.py` |
 | **Battery & RTH Telemetry** | Live 2S LiPo voltage (`8.30 V` / `95%`), auto-RTH at `7.10 V` | `src/robot/explorer_engine.py` |
 | **Cloud Dependency** | `0` required cloud accounts for video, voice, or LiDAR | `src/devices/local_camera_bridge.py` |
-| **Automated Verification** | `199` passing `pytest` tests (`0` warnings), `15` Next.js 16 routes | `tests/` + `frontend/` |
+| **Automated Verification** | `220` passing `pytest` tests (`0` failures), `18` Next.js 16 routes | `tests/` + `frontend/` |
+
+---
+
+## What's New in `v2.1.0`
+
+- **Universal Multi-Board 3D Hardware Lab & AI Co-Pilot (`/microbit`):** Switchable interactive Three.js 3D workbench for **BBC micro:bit v2.2**, **Raspberry Pi 5 16 GB**, and **Hiwonder PuppyPi Pro (+ LD19 LiDAR & WonderEcho AI Box)**, featuring a drag-and-drop **Hiwonder Sensor Library** (`Temp & Humidity v1.1 AHT10`, `Touch TTP223`, `Glowing Ultrasonic v5.6 I2C 0x77`, `8×16 LED Matrix TM1640`), 5V/3.3V electrical safety warnings, clickable 3D buttons/touch pads with live Web Audio + Web Speech simulation, and an OpenRouter AI Co-Pilot that writes & simulates behaviors before 1-click flashing over USB/SSH.
+- **Standalone Compositional Room Twin Studio (`/room-studio`):** Full-bleed Three.js `r187` Photo-to-3D PBR `.glb` + 3DGS room builder with OpenRouter Vision scene-graph object boxing, multi-provider image-to-3D (`local_depth3d`, `fal-ai/trellis-2`, `hunyuan-3d`, `tripo3d`), `TransformControls`, `.glb` export, and an AI Next-Best-View Ghost Camera Capture Coach.
+- **Dedicated SLAM Mapping Studio (`/slam`):** Live ROS 2 Humble Occupancy-Grid SLAM (`slam_toolbox` / `hiwonder_slam`) on PuppyPi Pro's LD19 360° LiDAR with live mapped-area (`m²`) & wall-cell telemetry and 1-click **Export → 3D Digital Twin `.glb`**.
+- **Overwatch Multi-Camera Stage & Self-Calibration (`/overwatch`):** Spotlight Main+Mini stage layouts, Camera Manager Drawer with automatic **Raspberry Pi 5 4K webcam** (`:8090/stream.mjpg`) discovery & puller, and a 4-tab Guided Self-Calibration Wizard.
+- **Universal Device Flasher (`/flash`) & Auto Fleet Sync (`/architect`):** Multi-platform flashing (Raspberry Pi OS, ROS 2, MicroPython, ESP32/ESPHome, BBC micro:bit) plus automatic fleet & USB peripheral synchronization into Lab Architect.
 
 ---
 

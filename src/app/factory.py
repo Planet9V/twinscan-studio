@@ -240,7 +240,7 @@ def create_app(
 
     app = FastAPI(
         title="Eigenia TwinScan API",
-        version="2.0.0",
+        version="2.1.0",
         description="Exemplar LD19 LiDAR, OpenRouter Vision & Direct Research, PostgreSQL 18 pgvector/Storage & Neo4j G_CPDT Studio",
         lifespan=lifespan,
     )
